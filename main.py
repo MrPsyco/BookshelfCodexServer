@@ -941,45 +941,14 @@ class _KosyncAuthDep:
 # Spec: https://specs.opds.io/opds-1.2 (Atom + OPDS namespaces).
 #
 import html as _html_mod
-import xml.etree.ElementTree as _ET
 from email.utils import format_datetime as _rfc3339
 from datetime import timezone as _tz
-
-_OPDS_ATOM = "http://www.w3.org/2005/Atom"
-_OPDS_NS   = "http://opds-spec.org/2010/catalog"
-_OPDS_DC   = "http://purl.org/dc/terms/"
-
-# ElementTree emits a default-namespace xmlns="" declaration for the empty
-# prefix when an Element is constructed via QName(). Register opds/dcterms
-# so SubElement calls use the proper prefix automatically. Do NOT also call
-# root.set('xmlns:opds', ...) - that creates duplicate xmlns attributes,
-# which KOReader's OPDS parser rejects.
-_ET.register_namespace("",        _OPDS_ATOM)
-_ET.register_namespace("opds",    _OPDS_NS)
-_ET.register_namespace("dcterms", _OPDS_DC)
-
-
-def _opds_xml(tree: _ET.ElementTree) -> bytes:
-    """Render an ElementTree with the OPDS XML declaration + UTF-8."""
-    body = _ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=False)
-    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + body
-
-
-def _xml_text(tag: str, text: str, **attrs) -> _ET.Element:
-    el = _ET.Element(tag)
-    el.text = text
-    for k, v in attrs.items():
-        el.set(k.replace("__", ":"), str(v))
-    return el
-
-
-def _xml_link(href: str, rel: str, type_: str, **extra) -> _ET.Element:
-    attrs = {"href": href, "rel": rel, "type": type_}
-    attrs.update(extra)
-    return _ET.Element("link", attrs)
+import uuid as _uuid
+import xml.etree.ElementTree as _ET  # still used by _epub_cover() to parse OPF
 
 
 def _esc(s: object) -> str:
+    """Escape a string for XML element text/attribute use."""
     return _html_mod.escape(str(s) if s is not None else "", quote=True)
 
 
@@ -989,6 +958,95 @@ def _opds_iso(dt) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=_tz.utc)
     return _rfc3339(dt.astimezone(_tz.utc))
+
+
+def _opds_entry_uuid(book_id: int) -> str:
+    """Stable URN-UUID for a book. Same book id -> same UUID across runs,
+    so KOReader doesn't see duplicate entries when we restart the server.
+    """
+    return "urn:uuid:" + str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"codexserver:book:{book_id}"))
+
+
+# OPDS 1.2 acquisition-feed XML is hand-written rather than built via
+# ElementTree. Reasons:
+#   * KOReader's OPDS parser is strict: every <entry> needs xmlns="atom",
+#     xmlns:dc, xmlns:opds ON the entry (not just the feed root), the
+#     acquisition link MUST be rel="http://opds-spec.org/acquisition" with
+#     type="application/epub+zip", and <id> must be a real urn:uuid:.
+#   * ElementTree emits duplicate xmlns attrs when you mix register_namespace()
+#     and root.set('xmlns:...'), and reflows attributes into an order that
+#     trips up some strict parsers. A string template is simpler and matches
+#     the OPDS spec example feed almost line-for-line.
+#
+# Format spec: https://specs.opds.io/opds-1.2
+OPDS_XML_DECL = '<?xml version="1.0" encoding="UTF-8"?>\n'
+OPDS_FEED_OPEN = (
+    '<feed xmlns="http://www.w3.org/2005/Atom"'
+    ' xmlns:dc="http://purl.org/dc/terms/"'
+    ' xmlns:opds="http://opds-spec.org/2010/catalog">\n'
+)
+OPDS_FEED_CLOSE = '</feed>\n'
+
+
+def _opds_root_feed() -> bytes:
+    body = (
+        OPDS_FEED_OPEN
+        + '<id>urn:codexserver:opds:root</id>\n'
+        + '<title>CodexServer Catalog</title>\n'
+        + f'<updated>{_opds_iso(None)}</updated>\n'
+        + '<link rel="self"'
+        + ' href="/opds"'
+        + ' type="application/atom+xml;profile=opds-catalog"/>\n'
+        + '<link rel="http://opds-spec.org/catalog"'
+        + ' href="/opds/books"'
+        + ' type="application/atom+xml;profile=opds-catalog"'
+        + ' title="All books"/>\n'
+        + OPDS_FEED_CLOSE
+    )
+    return (OPDS_XML_DECL + body).encode("utf-8")
+
+
+def _opds_books_feed(books: list) -> bytes:
+    parts = [
+        OPDS_XML_DECL,
+        OPDS_FEED_OPEN,
+        '<id>urn:codexserver:opds:books</id>\n',
+        '<title>CodexServer Books</title>\n',
+        f'<updated>{_opds_iso(None)}</updated>\n',
+        '<link rel="self"'
+        ' href="/opds/books"'
+        ' type="application/atom+xml;profile=opds-catalog"/>\n',
+    ]
+    for b in books:
+        title = _esc(b.title or "Untitled")
+        author = _esc(b.author or "Unknown Author")
+        # The acquisition link is the part KOReader actually downloads.
+        # rel MUST be exactly the OPDS spec rel (no /open-access suffix for
+        # anonymous download) and type MUST include +zip, otherwise KOReader
+        # ignores the entry entirely.
+        parts.append('<entry>\n')
+        parts.append(f'  <id>{_opds_entry_uuid(b.id)}</id>\n')
+        parts.append(f'  <title>{title}</title>\n')
+        parts.append(f'  <updated>{_opds_iso(b.added_at)}</updated>\n')
+        parts.append(f'  <author><name>{author}</name></author>\n')
+        if b.file_size:
+            parts.append(f'  <dc:extent>{int(b.file_size)}</dc:extent>\n')
+        # Acquisition link: the EPUB download.
+        parts.append(
+            '  <link rel="http://opds-spec.org/acquisition"'
+            f' href="/opds/download/{b.id}"'
+            ' type="application/epub+zip"'
+            f' title="{title}"/>\n'
+        )
+        # Thumbnail: optional, KOReader falls back gracefully on 404.
+        parts.append(
+            '  <link rel="http://opds-spec.org/image/thumbnail"'
+            f' href="/opds/cover/{b.id}"'
+            ' type="image/jpeg"/>\n'
+        )
+        parts.append('</entry>\n')
+    parts.append(OPDS_FEED_CLOSE)
+    return "".join(parts).encode("utf-8")
 
 
 def _require_opds_auth(request: Request, db: Session = Depends(get_db)) -> User:
@@ -1025,73 +1083,6 @@ def _require_opds_auth(request: Request, db: Session = Depends(get_db)) -> User:
             headers={"WWW-Authenticate": 'Basic realm="codexserver-opds"'},
         )
     return user
-
-
-def _opds_root_feed() -> bytes:
-    # Build the root element IN the atom namespace so the default xmlns
-    # is emitted on the <feed> tag. SubElement() children inherit it.
-    root = _ET.Element("{%s}feed" % _OPDS_ATOM)
-    root.append(_xml_text("id",   "urn:codexserver:opds:root"))
-    root.append(_xml_text("title", "CodexServer Catalog"))
-    root.append(_xml_text("updated", _opds_iso(None)))
-    # Navigation entry to the acquisition feed.
-    root.append(_xml_link(
-        href="/opds/books",
-        rel="http://opds-spec.org/catalog",
-        type_="application/atom+xml;profile=opds-catalog",
-        title="All books",
-    ))
-    return _opds_xml(_ET.ElementTree(root))
-
-
-def _opds_books_feed(books: list, root_url: str) -> bytes:
-    feed = _ET.Element("{%s}feed" % _OPDS_ATOM)
-
-    feed.append(_xml_text("id",    "urn:codexserver:opds:books"))
-    feed.append(_xml_text("title", "All books"))
-    feed.append(_xml_text("updated", _opds_iso(None)))
-    feed.append(_xml_link(
-        href="/opds/books",
-        rel="self",
-        type_="application/atom+xml;profile=opds-catalog",
-    ))
-
-    for b in books:
-        entry = _ET.SubElement(feed, "entry")
-        entry.append(_xml_text("id",     f"urn:codexserver:book:{b.id}"))
-        entry.append(_xml_text("title",  _esc(b.title)))
-        entry.append(_xml_text("updated", _opds_iso(b.added_at)))
-
-        author = _ET.SubElement(entry, "author")
-        author.append(_xml_text("name", _esc(b.author or "Unknown Author")))
-
-        # Summary: <dcterms:extent> for size, <summary> empty.
-        summary = _xml_text("summary", "")
-        entry.append(summary)
-
-        # Acquisition link: download the EPUB.
-        entry.append(_xml_link(
-            href=f"/opds/download/{b.id}",
-            rel="http://opds-spec.org/acquisition",
-            type_="application/epub+zip",
-            title="Download EPUB",
-        ))
-
-        # Optional thumbnail: cover image, falls back silently to 404 if absent.
-        entry.append(_xml_link(
-            href=f"/opds/cover/{b.id}",
-            rel="http://opds-spec.org/image/thumbnail",
-            type_="image/jpeg",
-        ))
-
-        # dcterms:extent as human-readable size in bytes.
-        if b.file_size:
-            extent = _ET.SubElement(entry, "{%s}extent" % _OPDS_DC)
-            extent.text = str(b.file_size)
-
-        feed.append(entry)
-
-    return _opds_xml(_ET.ElementTree(feed))
 
 
 def _epub_cover(path: str) -> tuple[bytes, str] | None:
@@ -1192,7 +1183,7 @@ def opds_books(user: User = Depends(_require_opds_auth), db: Session = Depends(g
     """OPDS 1.2 acquisition feed: every book in the catalog."""
     rows = db.query(Book).order_by(Book.added_at.desc()).all()
     return Response(
-        content=_opds_books_feed(rows, root_url=""),
+        content=_opds_books_feed(rows),
         media_type="application/atom+xml;profile=opds-catalog",
     )
 
