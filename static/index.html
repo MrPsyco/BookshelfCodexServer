@@ -11,28 +11,66 @@
     .drop-active { outline: 2px dashed rgb(99 102 241); outline-offset: -8px; background: rgba(99,102,241,0.08); }
     .pulse-dot { animation: pulse 1.6s ease-in-out infinite; }
     @keyframes pulse { 0%,100% { opacity:.4 } 50% { opacity:1 } }
-    pre { white-space: pre-wrap; word-break: break-word; }
+    pre { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, monospace; }
   </style>
 </head>
 <body class="bg-ink-950 text-slate-100 min-h-full">
 
   <div id="toasts" class="fixed top-4 right-4 z-50 space-y-2 pointer-events-none"></div>
 
-  <!-- Login overlay -->
-  <div id="login-overlay" class="fixed inset-0 z-40 bg-ink-950/90 grid place-items-center">
+  <!-- =================== Setup Overlay (no admin exists yet) =================== -->
+  <div id="setup-overlay" class="fixed inset-0 z-40 bg-ink-950 grid place-items-center px-4">
+    <form id="setup-form" class="w-full max-w-md rounded-xl border border-slate-800 bg-ink-900 p-7 space-y-5 shadow-2xl">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-500 via-fuchsia-500 to-rose-500 grid place-items-center font-black text-white">C</div>
+        <div>
+          <h2 class="text-lg font-semibold leading-none">Welcome to CodexServer</h2>
+          <p class="text-xs text-slate-500 mt-1">First-run setup - create your admin account</p>
+        </div>
+      </div>
+      <p class="text-sm text-slate-400">
+        CodexServer has no admin account yet. Pick a username and password. This only
+        happens once - from now on you'll sign in at <code>/</code>.
+      </p>
+      <div>
+        <label class="text-xs text-slate-400">Username</label>
+        <input id="setup-user" type="text" required minlength="3" maxlength="60"
+               autocomplete="username"
+               class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+      </div>
+      <div>
+        <label class="text-xs text-slate-400">Password</label>
+        <input id="setup-pass" type="password" required minlength="8"
+               autocomplete="new-password"
+               class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+        <p class="text-[11px] text-slate-500 mt-1">8 characters minimum. No character-class rules - just length.</p>
+      </div>
+      <div>
+        <label class="text-xs text-slate-400">Confirm password</label>
+        <input id="setup-pass2" type="password" required minlength="8"
+               autocomplete="new-password"
+               class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+      </div>
+      <button class="w-full bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium">Create admin account &amp; sign in</button>
+      <p id="setup-error" class="text-xs text-rose-400 hidden"></p>
+    </form>
+  </div>
+
+  <!-- =================== Login Overlay ===================================== -->
+  <div id="login-overlay" class="hidden fixed inset-0 z-40 bg-ink-950/90 grid place-items-center">
     <form id="login-form" class="w-80 rounded-xl border border-slate-800 bg-ink-900 p-6 space-y-3 shadow-2xl">
-      <h2 class="text-lg font-semibold">CodexServer login</h2>
-      <p class="text-xs text-slate-500">Find creds in <code>docker logs codexserver</code> if you didn't set them.</p>
-      <input id="login-user" type="text" placeholder="user" autocomplete="username"
+      <h2 class="text-lg font-semibold">Sign in</h2>
+      <p class="text-xs text-slate-500">Admin account only. KOReader uses Basic Auth on /sync/*</p>
+      <input id="login-user" type="text" placeholder="username" autocomplete="username" required
              class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
-      <input id="login-pass" type="password" placeholder="password" autocomplete="current-password"
+      <input id="login-pass" type="password" placeholder="password" autocomplete="current-password" required
              class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
       <button class="w-full bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 rounded text-sm font-medium">Sign in</button>
       <p id="login-error" class="text-xs text-rose-400 hidden"></p>
     </form>
   </div>
 
-  <!-- OAuth connect modal -->
+  <!-- =================== OAuth Connect Modal ============================== -->
   <div id="oauth-modal" class="fixed inset-0 z-40 hidden bg-ink-950/85 grid place-items-center px-4">
     <div class="w-full max-w-xl rounded-xl border border-slate-700 bg-ink-900 shadow-2xl">
       <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800">
@@ -42,7 +80,7 @@
       <div class="p-5 space-y-4">
         <div id="oauth-state-pending">
           <p class="text-sm text-slate-300 mb-2">To connect, you'll need <code>rclone</code> on a machine with a browser:</p>
-          <pre id="oauth-instructions" class="rounded-lg bg-ink-950 border border-slate-800 p-3 text-xs text-slate-300 font-mono"></pre>
+          <pre id="oauth-instructions" class="rounded-lg bg-ink-950 border border-slate-800 p-3 text-xs text-slate-300"></pre>
           <p class="text-xs text-slate-500 mt-3">
             When rclone prints a JSON token line, paste it below and click <em>Complete connection</em>.
           </p>
@@ -56,7 +94,7 @@
         <div>
           <label class="text-xs text-slate-400">Token blob (JSON from <code>rclone authorize</code>):</label>
           <textarea id="oauth-token" rows="4"
-                    class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-xs font-mono"
+                    class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-xs"
                     placeholder='{"access_token":"...","expires":...}'></textarea>
         </div>
         <div class="flex justify-end gap-2">
@@ -67,7 +105,106 @@
     </div>
   </div>
 
-  <header class="border-b border-slate-800/80 bg-ink-900/70 backdrop-blur sticky top-0 z-30">
+  <!-- =================== Add Metadata Provider Modal ====================== -->
+  <div id="add-meta-modal" class="fixed inset-0 z-40 hidden bg-ink-950/85 grid place-items-center px-4">
+    <form id="add-meta-form" class="w-full max-w-lg rounded-xl border border-slate-700 bg-ink-900 shadow-2xl">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800">
+        <h2 class="font-semibold">Add metadata provider</h2>
+        <button type="button" id="add-meta-close" class="text-slate-500 hover:text-slate-200 text-xl leading-none">&times;</button>
+      </div>
+      <div class="p-5 space-y-4">
+        <div>
+          <label class="text-xs text-slate-400">Provider</label>
+          <select id="add-meta-provider" class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm"></select>
+        </div>
+        <div id="add-meta-desc" class="rounded-md bg-ink-950/60 border border-slate-800 p-3 text-xs text-slate-400 leading-relaxed"></div>
+        <div id="add-meta-key-field">
+          <label class="text-xs text-slate-400">API key / endpoint URL</label>
+          <input id="add-meta-key" type="text"
+                 class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-xs font-mono"
+                 placeholder="Google Books API key (optional) or Ollama endpoint URL" />
+          <p class="text-[11px] text-slate-500 mt-1">Only relevant for <code>google_books</code> (API key) or <code>ollama</code> (URL). Internal OPF reads from the EPUB file itself and takes no input.</p>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-400">Priority (lower = runs first)</label>
+            <input id="add-meta-prio" type="number" value="50" min="1" max="999"
+                   class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+          </div>
+          <div class="flex items-end">
+            <label class="inline-flex items-center gap-2 text-sm text-slate-300">
+              <input type="checkbox" id="add-meta-active" checked class="accent-indigo-500">
+              Enabled
+            </label>
+          </div>
+        </div>
+        <p id="add-meta-error" class="text-xs text-rose-400 hidden"></p>
+        <div class="flex justify-end gap-2 pt-1">
+          <button type="button" id="add-meta-cancel" class="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-200">Cancel</button>
+          <button class="px-3 py-1.5 rounded text-sm bg-indigo-600 hover:bg-indigo-500 font-medium">Add provider</button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <!-- =================== Add KOReader User Modal ========================= -->
+  <div id="add-kuser-modal" class="fixed inset-0 z-40 hidden bg-ink-950/85 grid place-items-center px-4">
+    <form id="add-kuser-form" class="w-full max-w-md rounded-xl border border-slate-700 bg-ink-900 shadow-2xl">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800">
+        <h2 class="font-semibold">Add KOReader user</h2>
+        <button type="button" id="add-kuser-close" class="text-slate-500 hover:text-slate-200 text-xl leading-none">&times;</button>
+      </div>
+      <div class="p-5 space-y-3">
+        <p class="text-xs text-slate-400">
+          KOReader on your e-reader needs its own user credentials. Basic Auth on
+          <code>/sync/*</code>. Username is anything stable, password is whatever
+          you want to set.
+        </p>
+        <div>
+          <label class="text-xs text-slate-400">Username (device name)</label>
+          <input id="add-kuser-name" type="text" required
+                 class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-400">Password</label>
+          <input id="add-kuser-pass" type="password"
+                 class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+          <p class="text-[11px] text-slate-500 mt-1">Leave empty to auto-generate one (shown once).</p>
+        </div>
+        <p id="add-kuser-error" class="text-xs text-rose-400 hidden"></p>
+        <div class="flex justify-end gap-2 pt-1">
+          <button type="button" id="add-kuser-cancel" class="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-200">Cancel</button>
+          <button class="px-3 py-1.5 rounded text-sm bg-indigo-600 hover:bg-indigo-500 font-medium">Add user</button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <!-- =================== Generated Password Modal (KOReader) ============ -->
+  <div id="kpw-modal" class="fixed inset-0 z-40 hidden bg-ink-950/85 grid place-items-center px-4">
+    <div class="w-full max-w-md rounded-xl border border-slate-700 bg-ink-900 shadow-2xl">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800">
+        <h2 class="font-semibold">Generated KOReader password</h2>
+        <button id="kpw-close" class="text-slate-500 hover:text-slate-200 text-xl leading-none">&times;</button>
+      </div>
+      <div class="p-5 space-y-3">
+        <p class="text-sm text-amber-300">
+          Save this now - it is <strong>not shown again</strong>. Enter it into
+          KOReader under <em>Setup &rarr; Sync &rarr; Custom server credentials</em>.
+        </p>
+        <div class="flex items-center gap-2">
+          <code id="kpw-value" class="flex-1 rounded-md bg-ink-950 border border-slate-800 px-3 py-2 text-sm font-mono"></code>
+          <button id="kpw-copy" class="px-3 py-1.5 text-sm border border-slate-700 rounded hover:bg-slate-800">copy</button>
+        </div>
+        <div class="flex justify-end pt-1">
+          <button id="kpw-ok" class="px-3 py-1.5 rounded text-sm bg-indigo-600 hover:bg-indigo-500 font-medium">I saved it</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =================== Header / Navigation ============================== -->
+  <header id="app-header" class="hidden border-b border-slate-800/80 bg-ink-900/70 backdrop-blur sticky top-0 z-30">
     <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
       <div class="flex items-center gap-3">
         <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 via-fuchsia-500 to-rose-500 grid place-items-center font-black text-white">C</div>
@@ -84,17 +221,18 @@
           <span id="health-dot" class="inline-block w-2 h-2 rounded-full bg-slate-600 pulse-dot"></span>
           <span id="health-text">connecting…</span>
         </span>
-        <button id="logout-btn" class="ml-2 text-xs text-slate-500 hover:text-slate-200" title="Sign out">logout</button>
+        <span id="me-user" class="ml-2 text-xs text-slate-400"></span>
+        <button id="logout-btn" class="ml-1 text-xs text-slate-500 hover:text-slate-200" title="Sign out">logout</button>
       </div>
     </div>
   </header>
 
-  <main class="max-w-7xl mx-auto px-6 py-8">
+  <main id="app-main" class="hidden max-w-7xl mx-auto px-6 py-8">
 
     <section id="view-library" class="view">
       <div class="flex items-baseline justify-between mb-5">
         <h2 class="text-lg font-semibold tracking-tight">Library <span id="lib-count" class="text-slate-500 font-normal text-sm ml-2"></span></h2>
-        <button onclick="loadLibrary()" class="text-xs text-slate-400 hover:text-slate-200">refresh</button>
+        <button id="lib-refresh" class="text-xs text-slate-400 hover:text-slate-200">refresh</button>
       </div>
       <div id="library-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4"></div>
       <div id="library-empty" class="hidden text-center py-24 text-slate-500">
@@ -125,37 +263,42 @@
 
     <section id="view-settings" class="view hidden">
       <h2 class="text-lg font-semibold tracking-tight mb-5">Settings</h2>
-      <div class="grid lg:grid-cols-2 gap-6">
+      <div class="grid lg:grid-cols-3 gap-6">
         <div class="rounded-xl border border-slate-800 bg-ink-900/40 p-5">
           <div class="flex items-center justify-between mb-3">
             <h3 class="font-medium">Metadata Providers</h3>
             <button id="add-meta-btn" class="text-xs text-indigo-400 hover:text-indigo-300">+ add</button>
           </div>
-          <p class="text-xs text-slate-500 mb-3">Lower priority runs first.</p>
+          <p class="text-xs text-slate-500 mb-3">
+            CodexServer enriches each uploaded EPUB in priority order. The first
+            provider that returns both title <em>and</em> author wins.
+          </p>
           <div id="metadata-list" class="space-y-2"></div>
         </div>
+
         <div class="rounded-xl border border-slate-800 bg-ink-900/40 p-5">
           <div class="flex items-center justify-between mb-3">
             <h3 class="font-medium">Storage Backends</h3>
           </div>
           <p class="text-xs text-amber-400/80 mb-3">
-            Cloud backends are FUSE-mounted via <code>rclone mount</code> at <code>/mnt/cloud/&lt;backend&gt;_&lt;name&gt;</code>.
+            Cloud backends are FUSE-mounted via <code>rclone mount</code> at
+            <code>/mnt/cloud/&lt;backend&gt;_&lt;name&gt;</code>.
           </p>
           <form id="storage-form" class="space-y-2">
             <input name="label" required placeholder="Label (e.g. My GDrive)"
                    class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
             <select name="backend" id="storage-backend" class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm">
-              <option value="local">Lokales NAS</option>
+              <option value="local">Lokales NAS (default)</option>
               <option value="gdrive">Google Drive</option>
               <option value="onedrive">OneDrive</option>
               <option value="dropbox">Dropbox</option>
               <option value="webdav">Nextcloud / WebDAV</option>
-              <option value="s3">S3</option>
+              <option value="s3">S3 / generic S3-compatible</option>
             </select>
             <div class="grid grid-cols-2 gap-2">
               <input name="remote_name" placeholder="rclone remote name"
                      class="bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
-              <input name="remote_path" placeholder="/Books"
+              <input name="remote_path" placeholder="/Books (subfolder)"
                      class="bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
             </div>
             <textarea name="credentials_json" rows="3" id="credentials-json" placeholder='For gdrive/onedrive/dropbox/s3: {"token":"..."} or vendor-specific JSON. For webdav: {"url":"https://...","user":"...","pass":"..."}'
@@ -167,60 +310,25 @@
           </form>
           <div id="storage-list" class="mt-4 space-y-1 text-sm"></div>
         </div>
+
+        <div class="rounded-xl border border-slate-800 bg-ink-900/40 p-5">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-medium">KOReader Users</h3>
+            <button id="add-kuser-btn" class="text-xs text-indigo-400 hover:text-indigo-300">+ add</button>
+          </div>
+          <p class="text-xs text-slate-500 mb-3">
+            One user per e-reader. KOReader signs in with HTTP Basic Auth on
+            <code>/sync/*</code>. KOReader password is independent from your
+            admin password.
+          </p>
+          <div id="kusers-list" class="space-y-1 text-sm"></div>
+        </div>
       </div>
     </section>
   </main>
 
   <script>
-  // ============= auth =============
-  const AUTH_KEY = 'codex_auth';
-
-  function setCreds(user, pass) {
-    if (user && pass) sessionStorage.setItem(AUTH_KEY, btoa(user + ':' + pass));
-    else sessionStorage.removeItem(AUTH_KEY);
-  }
-  function authHeader() {
-    const v = sessionStorage.getItem(AUTH_KEY);
-    return v ? { 'Authorization': 'Basic ' + v } : {};
-  }
-
-  async function authedFetch(url, opts = {}) {
-    opts.headers = Object.assign({}, opts.headers || {}, authHeader());
-    const r = await fetch(url, opts);
-    if (r.status === 401) {
-      document.getElementById('login-overlay').classList.remove('hidden');
-      throw new Error('unauthorized');
-    }
-    return r;
-  }
-
-  document.getElementById('login-form').addEventListener('submit', async e => {
-    e.preventDefault();
-    const u = document.getElementById('login-user').value.trim();
-    const p = document.getElementById('login-pass').value;
-    setCreds(u, p);
-    try {
-      const r = await authedFetch('/api/books');
-      if (r.ok) {
-        document.getElementById('login-overlay').classList.add('hidden');
-        document.getElementById('login-error').classList.add('hidden');
-        document.getElementById('login-pass').value = '';
-        loadLibrary();
-      }
-    } catch {
-      const err = document.getElementById('login-error');
-      err.textContent = 'Wrong credentials.';
-      err.classList.remove('hidden');
-      setCreds(null, null);
-    }
-  });
-
-  document.getElementById('logout-btn').addEventListener('click', () => {
-    setCreds(null, null);
-    document.getElementById('login-overlay').classList.remove('hidden');
-  });
-
-  // ============= utils =============
+  // ================================================= utils ================
   const $  = (s, r=document) => r.querySelector(s);
   const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
   const esc = s => (s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -235,18 +343,138 @@
     setTimeout(() => { el.style.transition='opacity .3s'; el.style.opacity='0'; setTimeout(()=>el.remove(), 300); }, 4000);
   }
 
-  function showView(name) {
-    $$('.view').forEach(v => v.classList.add('hidden'));
-    $('#view-' + name).classList.remove('hidden');
-    $$('.nav-btn').forEach(b => b.classList.remove('bg-slate-800'));
-    const btn = $$('.nav-btn').find(b => b.dataset.view === name);
-    if (btn) btn.classList.add('bg-slate-800');
-    if (name === 'library')  loadLibrary();
-    if (name === 'upload')   loadBackends();
-    if (name === 'settings') { loadMetadata(); loadStorage(); }
+  function showError(el, msg) {
+    el.textContent = msg;
+    el.classList.remove('hidden');
   }
-  $$('.nav-btn').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
 
+  function hideError(el) { el.classList.add('hidden'); el.textContent = ''; }
+
+  // ============================================== authed fetch =========
+  // Cookie-based session. We use credentials: 'include' so the browser sends
+  // the HttpOnly codex_session cookie on every request.
+  // IMPORTANT: never read or write the cookie from JS - the server controls it.
+  async function authedFetch(url, opts = {}) {
+    opts = Object.assign({ credentials: 'include' }, opts);
+    // 401 in the UI is shown by showing the login/setup overlay; NEVER trigger
+    // a native basic-auth dialog, so we strip any Authorization header.
+    if (opts.headers) {
+      delete opts.headers['Authorization'];
+      delete opts.headers['authorization'];
+    }
+    const r = await fetch(url, opts);
+    if (r.status === 401) { showAuthScreen(); throw new Error('unauthorized'); }
+    return r;
+  }
+
+  // ============================================ auth screen router ===
+  async function showAuthScreen() {
+    try {
+      const r = await fetch('/api/setup/status', { credentials: 'include' });
+      const j = await r.json();
+      if (j.needs_setup) {
+        $('#setup-overlay').classList.remove('hidden');
+        $('#login-overlay').classList.add('hidden');
+      } else {
+        $('#login-overlay').classList.remove('hidden');
+        $('#setup-overlay').classList.add('hidden');
+      }
+    } catch {
+      // If even setup/status fails the server is offline; leave whatever is
+      // showing and poll health.
+    }
+    $('#app-header').classList.add('hidden');
+    $('#app-main').classList.add('hidden');
+  }
+
+  function showAppShell() {
+    $('#setup-overlay').classList.add('hidden');
+    $('#login-overlay').classList.add('hidden');
+    $('#app-header').classList.remove('hidden');
+    $('#app-main').classList.remove('hidden');
+  }
+
+  // =========================================== setup form (first run) ===
+  $('#setup-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const u = $('#setup-user').value.trim();
+    const p = $('#setup-pass').value;
+    const p2 = $('#setup-pass2').value;
+    const errEl = $('#setup-error');
+    hideError(errEl);
+
+    if (u.length < 3) return showError(errEl, 'Username must be at least 3 characters.');
+    if (p.length < 8) return showError(errEl, 'Password must be at least 8 characters.');
+    if (p !== p2)     return showError(errEl, 'Passwords do not match.');
+
+    try {
+      const r = await fetch('/api/setup/complete', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: u, password: p }),
+      });
+      if (r.status === 201) {
+        await enterApp();
+        toast('Welcome, ' + u, 'success');
+      } else {
+        const j = await r.json().catch(() => ({}));
+        showError(errEl, j.detail || ('HTTP ' + r.status));
+      }
+    } catch (e) {
+      showError(errEl, 'Network error: ' + e.message);
+    }
+  });
+
+  // ============================================= login form (existing) ==
+  $('#login-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const u = $('#login-user').value.trim();
+    const p = $('#login-pass').value;
+    const errEl = $('#login-error');
+    hideError(errEl);
+    try {
+      const r = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: u, password: p }),
+      });
+      if (r.ok) {
+        await enterApp();
+        toast('Signed in.', 'success');
+      } else {
+        showError(errEl, 'Wrong username or password.');
+      }
+    } catch (e) {
+      showError(errEl, 'Network error: ' + e.message);
+    }
+  });
+
+  $('#logout-btn').addEventListener('click', async () => {
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+    showAuthScreen();
+    toast('Signed out', 'info');
+  });
+
+  async function enterApp() {
+    showAppShell();
+    pollHealth();
+    await refreshMe();
+    showView('library');
+    await loadLibrary();
+  }
+
+  async function refreshMe() {
+    try {
+      const r = await fetch('/api/auth/me', { credentials: 'include' });
+      if (!r.ok) { showAuthScreen(); return; }
+      const j = await r.json();
+      $('#me-user').textContent = '@' + j.username;
+    } catch { showAuthScreen(); }
+  }
+
+  // ============================================== health polling ======
   async function pollHealth() {
     try {
       const r = await fetch('/health');
@@ -258,9 +486,23 @@
       $('#health-text').textContent = 'offline';
     }
   }
-  pollHealth(); setInterval(pollHealth, 8000);
+  setInterval(pollHealth, 8000);
 
-  // ============= library =============
+  // ============================================= navigation + library ==
+  function showView(name) {
+    $$('.view').forEach(v => v.classList.add('hidden'));
+    $('#view-' + name).classList.remove('hidden');
+    $$('.nav-btn').forEach(b => b.classList.remove('bg-slate-800'));
+    const btn = $$('.nav-btn').find(b => b.dataset.view === name);
+    if (btn) btn.classList.add('bg-slate-800');
+    if (name === 'library')  loadLibrary();
+    if (name === 'upload')   loadBackends();
+    if (name === 'settings') { loadMetadata(); loadStorage(); loadKUsers(); }
+  }
+  $$('.nav-btn').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
+
+  $('#lib-refresh').addEventListener('click', loadLibrary);
+
   function coverSvg(title, author) {
     let h = 0; for (const c of (title||'?')) h = (h*31 + c.charCodeAt(0)) & 0xffff;
     const hue1 = h % 360, hue2 = (hue1 + 60) % 360;
@@ -282,7 +524,6 @@
   }
 
   async function loadLibrary() {
-    if (!sessionStorage.getItem(AUTH_KEY)) return;
     let books = [];
     try { books = await (await authedFetch('/api/books')).json(); } catch { return; }
     const grid = $('#library-grid'), empty = $('#library-empty');
@@ -300,14 +541,14 @@
       </article>`).join('');
   }
 
-  // ============= upload =============
+  // ============================================= upload ===============
   async function loadBackends() {
     let list = [];
     try { list = await (await authedFetch('/api/storage')).json(); } catch { return; }
     const sel = $('#upload-backend');
     sel.innerHTML = '<option value="local">local</option>' +
       list.filter(s => s.backend !== 'local' && s.mounted)
-          .map(s => `<option value="${esc(s.backend)}">${esc(s.label)} (${esc(s.backend)}${s.mounted?'':' - NOT MOUNTED'})</option>`)
+          .map(s => `<option value="${esc(s.backend)}">${esc(s.label)} (${esc(s.backend)})</option>`)
           .join('');
     $('#backend-hint').textContent = 'only mounted cloud backends appear here.';
   }
@@ -345,7 +586,8 @@
         const fd = new FormData(); fd.append('file', f); fd.append('backend', backend);
         const xhr = new XMLHttpRequest();
         xhr.open('POST', '/upload');
-        for (const [k,v] of Object.entries(authHeader())) xhr.setRequestHeader(k,v);
+        // No Authorization header (would clash with cookie); browser sends cookie automatically.
+        xhr.withCredentials = true;
         xhr.upload.onprogress = (e) => { if (e.lengthComputable) bar.style.width = Math.max(5, Math.round(e.loaded/e.total*95)) + '%'; };
         const j = await new Promise((resolve, reject) => {
           xhr.onload = () => xhr.status >= 200 && xhr.status < 300
@@ -365,23 +607,45 @@
     }
   }
 
-  // ============= metadata =============
+  // =========================================== metadata ===============
+  // Plain-language descriptions for the layperson.
+  const PROVIDER_DESC = {
+    internal_opf:
+      "Reads the EPUB file itself. Every well-formed EPUB carries a <code>content.opf</code> with title and author written by whoever packed the file - this provider just unzips and parses it. Fast, offline, works for ~99% of EPUBs.",
+    google_books:
+      "If the EPUB is missing metadata, this provider searches the public Google Books index for the filename and pulls whatever title and author it finds. Free, no API key needed (rate-limited to ~1000 req/day). Add an API key to lift the limit.",
+    ollama:
+      "Local LLM fallback. Hands the raw EPUB text to a model running on this NAS (default <code>http://192.168.1.146:11434</code>) and asks it to extract title and author. Slower (~3-8s per book) but handles weirdly-packed EPUBs the other providers refuse.",
+    openai:
+      "Same idea as Ollama, but calling OpenAI's API. Requires an API key. Not enabled by default - add if you have an OpenAI key and privacy isn't an issue.",
+  };
+
   async function loadMetadata() {
     let list = [];
     try { list = await (await authedFetch('/api/metadata')).json(); } catch { return; }
-    $('#metadata-list').innerHTML = list.map(m => `
-      <div class="flex items-center gap-2 rounded-md border border-slate-800 bg-ink-950/60 px-2.5 py-1.5" data-id="${m.id}">
-        <input type="checkbox" ${m.is_active?'checked':''} class="meta-active accent-indigo-500">
-        <span class="flex-1 text-sm">${esc(m.provider_name)}</span>
-        <input type="text" value="${esc(m.api_key_or_url||'')}" placeholder="key/url"
-               class="meta-url w-44 bg-ink-950 border border-slate-800 rounded px-2 py-0.5 text-xs font-mono">
-        <input type="number" value="${m.priority}" class="meta-prio w-14 bg-ink-950 border border-slate-800 rounded px-2 py-0.5 text-xs">
-        <button class="meta-save text-xs text-indigo-400 hover:text-indigo-300 px-1">save</button>
-        <button class="meta-del text-xs text-rose-400 hover:text-rose-300 px-1">x</button>
-      </div>`).join('') || '<p class="text-xs text-slate-500">No providers.</p>';
+    $('#metadata-list').innerHTML = list.map(m => {
+      const desc = PROVIDER_DESC[m.provider_name] || '';
+      return `
+      <div class="rounded-md border border-slate-800 bg-ink-950/60 px-2.5 py-1.5" data-id="${m.id}">
+        <div class="flex items-center gap-2">
+          <input type="checkbox" ${m.is_active?'checked':''} class="meta-active accent-indigo-500">
+          <span class="flex-1 text-sm font-medium">${esc(m.provider_name)}</span>
+          <span class="text-[10px] text-slate-500">prio</span>
+          <input type="number" value="${m.priority}" class="meta-prio w-14 bg-ink-950 border border-slate-800 rounded px-2 py-0.5 text-xs">
+          <button class="meta-save text-xs text-indigo-400 hover:text-indigo-300 px-1">save</button>
+          <button class="meta-del text-xs text-rose-400 hover:text-rose-300 px-1">x</button>
+        </div>
+        ${desc ? '<p class="mt-1.5 text-[11px] text-slate-500 leading-relaxed">' + desc + '</p>' : ''}
+        <div class="mt-1.5">
+          <input type="text" value="${esc(m.api_key_or_url||'')}" placeholder="${m.provider_name === 'ollama' ? 'http://ollama-host:11434/api/generate' : m.provider_name === 'google_books' ? 'Google Books API key (optional)' : 'API key / endpoint URL'}"
+                 class="meta-url w-full bg-ink-950 border border-slate-800 rounded px-2 py-0.5 text-xs font-mono">
+        </div>
+      </div>`;
+    }).join('') || '<p class="text-xs text-slate-500">No providers configured.</p>';
     $$('.meta-save').forEach(b => b.addEventListener('click', () => saveMeta(b.closest('[data-id]'))));
     $$('.meta-del').forEach(b => b.addEventListener('click', () => delMeta(b.closest('[data-id]'))));
   }
+
   async function saveMeta(row) {
     const body = {
       provider_name: row.querySelector('span').textContent.trim(),
@@ -398,25 +662,61 @@
     await authedFetch('/api/metadata/' + row.dataset.id, { method:'DELETE' });
     loadMetadata();
   }
-  $('#add-meta-btn').addEventListener('click', async () => {
-    const name = prompt('Provider name (internal_opf | google_books | ollama | openai):');
-    if (!name) return;
+
+  // -------- Add provider via modal (not native prompt) --------
+  const ADD_META_PROVIDERS = ['internal_opf', 'google_books', 'ollama', 'openai'];
+  function openAddMetaModal() {
+    const sel = $('#add-meta-provider');
+    sel.innerHTML = ADD_META_PROVIDERS.map(p => `<option value="${p}">${p}</option>`).join('');
+    $('#add-meta-key').value = '';
+    $('#add-meta-prio').value = '50';
+    $('#add-meta-active').checked = true;
+    hideError($('#add-meta-error'));
+    refreshAddMetaDesc();
+    $('#add-meta-modal').classList.remove('hidden');
+  }
+  function closeAddMetaModal() { $('#add-meta-modal').classList.add('hidden'); }
+  function refreshAddMetaDesc() {
+    const p = $('#add-meta-provider').value;
+    $('#add-meta-desc').innerHTML = PROVIDER_DESC[p] || '<em>No description.</em>';
+  }
+  $('#add-meta-provider').addEventListener('change', refreshAddMetaDesc);
+  $('#add-meta-btn').addEventListener('click', openAddMetaModal);
+  $('#add-meta-close').addEventListener('click', closeAddMetaModal);
+  $('#add-meta-cancel').addEventListener('click', closeAddMetaModal);
+  $('#add-meta-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const body = {
+      provider_name: $('#add-meta-provider').value,
+      is_active: $('#add-meta-active').checked,
+      priority: parseInt($('#add-meta-prio').value) || 100,
+      api_key_or_url: $('#add-meta-key').value.trim(),
+    };
     const r = await authedFetch('/api/metadata', {
-      method:'POST', headers:{'content-type':'application/json'},
-      body: JSON.stringify({ provider_name: name.trim(), is_active: true, priority: 50, api_key_or_url: '' })
+      method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)
     });
-    if (!r.ok) { toast('Unknown provider', 'error'); return; }
-    loadMetadata();
+    if (r.ok) { closeAddMetaModal(); loadMetadata(); toast('Provider added', 'success'); }
+    else {
+      const j = await r.json().catch(() => ({}));
+      showError($('#add-meta-error'), j.detail || ('HTTP ' + r.status));
+    }
   });
 
-  // ============= storage =============
+  // =========================================== storage ===============
   const OAUTH_BACKENDS = new Set(['gdrive', 'onedrive', 'dropbox', 'box']);
 
-  // Toggle "Connect with OAuth" button visibility based on backend choice.
+  const BACKEND_DESC = {
+    local:    "Files live directly on this NAS under <code>/books</code>. Always available, no setup required.",
+    gdrive:   "Google Drive. Use 'Connect with OAuth' to paste a token from <code>rclone authorize drive</code>.",
+    onedrive: "Microsoft OneDrive. Same flow as Google Drive, with <code>rclone authorize onedrive</code>.",
+    dropbox:  "Dropbox. Use <code>rclone authorize dropbox</code> on a browser machine.",
+    webdav:   "Any WebDAV server (Nextcloud, ownCloud, generic). Paste <code>{url,user,pass}</code> into credentials.",
+    s3:       "Any S3-compatible storage (AWS, Backblaze, Wasabi, MinIO). Paste access key + endpoint.",
+  };
+
   function refreshOAuthButton() {
     const b = $('#storage-backend').value;
     $('#connect-oauth').classList.toggle('hidden', !OAUTH_BACKENDS.has(b));
-    // Also clear the credentials_json placeholder hint when OAuth applies.
     const hint = $('#credentials-json');
     if (OAUTH_BACKENDS.has(b)) {
       hint.placeholder = 'Leave empty for OAuth flow, or paste credentials manually.';
@@ -425,8 +725,17 @@
     } else if (b === 's3') {
       hint.placeholder = '{"provider":"AWS","access_key_id":"...","secret_access_key":"...","region":"...","endpoint":"..."}';
     } else {
-      hint.placeholder = '(no credentials required)';
+      hint.placeholder = '(local backend - no credentials required)';
     }
+    // Update help line below the form
+    let help = $('#storage-form-help');
+    if (!help) {
+      help = document.createElement('p');
+      help.id = 'storage-form-help';
+      help.className = 'text-[11px] text-slate-500 leading-relaxed';
+      $('#credentials-json').insertAdjacentElement('afterend', help);
+    }
+    help.innerHTML = BACKEND_DESC[b] || '';
   }
   $('#storage-backend').addEventListener('change', refreshOAuthButton);
   refreshOAuthButton();
@@ -479,7 +788,7 @@
     loadStorage(); loadBackends();
   }
 
-  // ============= OAuth modal =============
+  // =========================================== OAuth modal ============
   let _oauthStorageId = null;
   async function openOAuthModal(sid) {
     _oauthStorageId = sid;
@@ -523,6 +832,7 @@
       const r = await authedFetch('/api/storage/' + _oauthStorageId + '/auth_complete', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ token_blob: blob, mode: 'auto' })
       });
       const j = await r.json().catch(() => ({}));
@@ -544,7 +854,6 @@
     }
   });
 
-  // "Connect with OAuth" button on the form: save the form, then open the modal.
   $('#connect-oauth').addEventListener('click', async () => {
     const form = $('#storage-form');
     const fd = new FormData(form);
@@ -585,12 +894,77 @@
     loadStorage(); loadBackends();
   });
 
-  // boot
-  if (sessionStorage.getItem(AUTH_KEY)) {
-    document.getElementById('login-overlay').classList.add('hidden');
-    showView('library');
-    loadLibrary();
+  // =========================================== KOReader users =========
+  async function loadKUsers() {
+    let list = [];
+    try { list = await (await authedFetch('/api/koreader/users')).json(); } catch { return; }
+    $('#kusers-list').innerHTML = list.map(u => `
+      <div class="flex items-center justify-between rounded-md border border-slate-800 bg-ink-950/60 px-3 py-1.5" data-id="${u.id}">
+        <div>
+          <span class="text-sm font-medium">${esc(u.username)}</span>
+          <span class="ml-2 text-[11px] ${u.has_password?'text-emerald-400':'text-slate-500'}">${u.has_password?'● pw set':'○ no password'}</span>
+        </div>
+        <button class="kuser-del text-xs text-rose-400 hover:text-rose-300">delete</button>
+      </div>
+    `).join('') || '<p class="text-xs text-slate-500">No KOReader users yet.</p>';
+    $$('.kuser-del').forEach(b => b.addEventListener('click', () => delKUser(b.closest('[data-id]'))));
   }
+  async function delKUser(row) {
+    await authedFetch('/api/koreader/users/' + row.dataset.id, { method:'DELETE' });
+    loadKUsers();
+  }
+  function openAddKUserModal() {
+    $('#add-kuser-name').value = '';
+    $('#add-kuser-pass').value = '';
+    hideError($('#add-kuser-error'));
+    $('#add-kuser-modal').classList.remove('hidden');
+  }
+  $('#add-kuser-btn').addEventListener('click', openAddKUserModal);
+  $('#add-kuser-close').addEventListener('click', () => $('#add-kuser-modal').classList.add('hidden'));
+  $('#add-kuser-cancel').addEventListener('click', () => $('#add-kuser-modal').classList.add('hidden'));
+  $('#add-kuser-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    hideError($('#add-kuser-error'));
+    const body = { username: $('#add-kuser-name').value.trim() };
+    if ($('#add-kuser-pass').value) body.password = $('#add-kuser-pass').value;
+    const r = await authedFetch('/api/koreader/users', {
+      method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)
+    });
+    if (r.ok) {
+      const j = await r.json();
+      $('#add-kuser-modal').classList.add('hidden');
+      loadKUsers();
+      if (j.generated_password) {
+        $('#kpw-value').textContent = j.generated_password;
+        $('#kpw-modal').classList.remove('hidden');
+      } else {
+        toast('User added', 'success');
+      }
+    } else {
+      const j = await r.json().catch(() => ({}));
+      showError($('#add-kuser-error'), j.detail || ('HTTP ' + r.status));
+    }
+  });
+  $('#kpw-close').addEventListener('click', () => $('#kpw-modal').classList.add('hidden'));
+  $('#kpw-ok').addEventListener('click', () => $('#kpw-modal').classList.add('hidden'));
+  $('#kpw-copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText($('#kpw-value').textContent);
+          toast('Copied', 'success'); } catch { toast('Clipboard blocked', 'error'); }
+  });
+
+  // =========================================== boot ===================
+  (async function boot() {
+    // Try /api/auth/me with cookies. If 401 we route to setup or login.
+    try {
+      const r = await fetch('/api/auth/me', { credentials: 'include' });
+      if (r.ok) {
+        await enterApp();
+        return;
+      }
+      // r.status === 401 without WWW-Authenticate on the server: fall through.
+    } catch {}
+    await showAuthScreen();
+  })();
   </script>
 </body>
 </html>

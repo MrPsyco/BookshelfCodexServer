@@ -10,7 +10,12 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(120), unique=True, nullable=False, index=True)
+    # RBAC: 'admin' can hit /api/* & /ui/; 'koreader' only hits /sync/*
+    role = Column(String(20), nullable=False, default="koreader")
+    # bcrypt hash; NULL for legacy KOReader rows that have no password
+    password_hash = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_login_at = Column(DateTime, nullable=True)
 
     progress = relationship("Progress", back_populates="user", cascade="all, delete-orphan")
 

@@ -31,12 +31,20 @@ def _ensure_columns() -> None:
     changes. Instead, inspect the table and ALTER TABLE ADD COLUMN if missing.
     """
     insp = inspect(engine)
-    if not insp.has_table("storage_configs"):
-        return
-    cols = {c["name"] for c in insp.get_columns("storage_configs")}
-    if "auth_status" not in cols:
+    if insp.has_table("storage_configs"):
+        cols = {c["name"] for c in insp.get_columns("storage_configs")}
+        if "auth_status" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE storage_configs ADD COLUMN auth_status TEXT"))
+    if insp.has_table("users"):
+        cols = {c["name"] for c in insp.get_columns("users")}
         with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE storage_configs ADD COLUMN auth_status TEXT"))
+            if "role" not in cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) NOT NULL DEFAULT 'koreader'"))
+            if "password_hash" not in cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)"))
+            if "last_login_at" not in cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN last_login_at DATETIME"))
 
 
 def init_db() -> None:
