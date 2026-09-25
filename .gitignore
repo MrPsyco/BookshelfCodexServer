@@ -4,3 +4,5 @@ __pycache__/
 /books/
 .DS_Store
 *.db-journal
+
+tailwindcss

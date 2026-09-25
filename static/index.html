@@ -17,6 +17,20 @@
 
   <div id="toasts" class="fixed top-4 right-4 z-50 space-y-2 pointer-events-none"></div>
 
+  <!-- Login modal: shown until auth succeeds -->
+  <div id="login-overlay" class="fixed inset-0 z-40 bg-ink-950/90 grid place-items-center">
+    <form id="login-form" class="w-80 rounded-xl border border-slate-800 bg-ink-900 p-6 space-y-3 shadow-2xl">
+      <h2 class="text-lg font-semibold">CodexServer login</h2>
+      <p class="text-xs text-slate-500">Find creds in <code>docker logs codexserver</code> if you didn't set them.</p>
+      <input id="login-user" type="text" placeholder="user" autocomplete="username"
+             class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+      <input id="login-pass" type="password" placeholder="password" autocomplete="current-password"
+             class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+      <button class="w-full bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 rounded text-sm font-medium">Sign in</button>
+      <p id="login-error" class="text-xs text-rose-400 hidden"></p>
+    </form>
+  </div>
+
   <header class="border-b border-slate-800/80 bg-ink-900/70 backdrop-blur sticky top-0 z-30">
     <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
       <div class="flex items-center gap-3">
@@ -34,6 +48,7 @@
           <span id="health-dot" class="inline-block w-2 h-2 rounded-full bg-slate-600 pulse-dot"></span>
           <span id="health-text">connecting…</span>
         </span>
+        <button id="logout-btn" class="ml-2 text-xs text-slate-500 hover:text-slate-200" title="Sign out">logout</button>
       </div>
     </div>
   </header>
@@ -54,6 +69,13 @@
 
     <section id="view-upload" class="view hidden">
       <h2 class="text-lg font-semibold tracking-tight mb-5">Upload EPUB</h2>
+      <div class="mb-3 flex items-center gap-2 text-sm">
+        <label class="text-slate-400">Backend:</label>
+        <select id="upload-backend" class="bg-ink-950 border border-slate-800 rounded px-2 py-1 text-sm">
+          <option value="local">local</option>
+        </select>
+        <span id="backend-hint" class="text-xs text-slate-500"></span>
+      </div>
       <div id="dropzone" class="rounded-2xl border-2 border-dashed border-slate-700 bg-ink-900/40 p-12 text-center transition">
         <p class="mt-2 text-slate-300">Drop one or more <code>.epub</code> files here</p>
         <p class="text-xs text-slate-500 mt-1">or</p>
@@ -73,7 +95,7 @@
             <h3 class="font-medium">Metadata Providers</h3>
             <button id="add-meta-btn" class="text-xs text-indigo-400 hover:text-indigo-300">+ add</button>
           </div>
-          <p class="text-xs text-slate-500 mb-3">Lower priority runs first. Chain stops as soon as title and author are filled.</p>
+          <p class="text-xs text-slate-500 mb-3">Lower priority runs first.</p>
           <div id="metadata-list" class="space-y-2"></div>
         </div>
         <div class="rounded-xl border border-slate-800 bg-ink-900/40 p-5">
@@ -81,11 +103,10 @@
             <h3 class="font-medium">Storage Backends</h3>
           </div>
           <p class="text-xs text-amber-400/80 mb-3">
-            Cloud backends currently store credentials only. The actual <code>rclone</code> remote is Phase 2.
-            Local backend works end-to-end.
+            Cloud backends are FUSE-mounted via <code>rclone mount</code> at <code>/mnt/cloud/&lt;backend&gt;_&lt;name&gt;</code>.
           </p>
           <form id="storage-form" class="space-y-2">
-            <input name="label" required placeholder="Label (e.g. My NAS)"
+            <input name="label" required placeholder="Label (e.g. My GDrive)"
                    class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
             <select name="backend" class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm">
               <option value="local">Lokales NAS</option>
@@ -101,9 +122,9 @@
               <input name="remote_path" placeholder="/Books"
                      class="bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
             </div>
-            <textarea name="credentials_json" rows="2" placeholder="credentials (token / JSON / config-blob)"
+            <textarea name="credentials_json" rows="3" placeholder='For gdrive/onedrive/dropbox/s3: {"token":"..."} or vendor-specific JSON. For webdav: {"url":"https://...","user":"...","pass":"..."}'
                       class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-xs font-mono"></textarea>
-            <button class="bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 rounded text-sm font-medium">Save</button>
+            <button class="bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 rounded text-sm font-medium">Save &amp; mount</button>
           </form>
           <div id="storage-list" class="mt-4 space-y-1 text-sm"></div>
         </div>
@@ -112,6 +133,57 @@
   </main>
 
   <script>
+  // ============= auth =============
+  // We store creds in sessionStorage so a refresh keeps you signed in
+  // for the tab lifetime. sessionStorage is per-tab and clears on close.
+  const AUTH_KEY = 'codex_auth';
+
+  function setCreds(user, pass) {
+    if (user && pass) sessionStorage.setItem(AUTH_KEY, btoa(user + ':' + pass));
+    else sessionStorage.removeItem(AUTH_KEY);
+  }
+  function authHeader() {
+    const v = sessionStorage.getItem(AUTH_KEY);
+    return v ? { 'Authorization': 'Basic ' + v } : {};
+  }
+
+  async function authedFetch(url, opts = {}) {
+    opts.headers = Object.assign({}, opts.headers || {}, authHeader());
+    const r = await fetch(url, opts);
+    if (r.status === 401) {
+      document.getElementById('login-overlay').classList.remove('hidden');
+      throw new Error('unauthorized');
+    }
+    return r;
+  }
+
+  document.getElementById('login-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const u = document.getElementById('login-user').value.trim();
+    const p = document.getElementById('login-pass').value;
+    setCreds(u, p);
+    try {
+      const r = await authedFetch('/api/books');
+      if (r.ok) {
+        document.getElementById('login-overlay').classList.add('hidden');
+        document.getElementById('login-error').classList.add('hidden');
+        document.getElementById('login-pass').value = '';
+        loadLibrary();
+      }
+    } catch {
+      const err = document.getElementById('login-error');
+      err.textContent = 'Wrong credentials.';
+      err.classList.remove('hidden');
+      setCreds(null, null);
+    }
+  });
+
+  document.getElementById('logout-btn').addEventListener('click', () => {
+    setCreds(null, null);
+    document.getElementById('login-overlay').classList.remove('hidden');
+  });
+
+  // ============= utils =============
   const $  = (s, r=document) => r.querySelector(s);
   const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
   const esc = s => (s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -133,15 +205,17 @@
     const btn = $$('.nav-btn').find(b => b.dataset.view === name);
     if (btn) btn.classList.add('bg-slate-800');
     if (name === 'library')  loadLibrary();
+    if (name === 'upload')   loadBackends();
     if (name === 'settings') { loadMetadata(); loadStorage(); }
   }
   $$('.nav-btn').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
 
   async function pollHealth() {
     try {
-      const j = await (await fetch('/health')).json();
+      const r = await fetch('/health');
+      const j = await r.json();
       $('#health-dot').className = 'inline-block w-2 h-2 rounded-full bg-emerald-500 pulse-dot';
-      $('#health-text').textContent = 'online · ' + j.books_root;
+      $('#health-text').textContent = 'online · ' + j.books_root + ' · ' + (j.active_mounts||[]).length + ' mounts';
     } catch {
       $('#health-dot').className = 'inline-block w-2 h-2 rounded-full bg-rose-500 pulse-dot';
       $('#health-text').textContent = 'offline';
@@ -149,6 +223,7 @@
   }
   pollHealth(); setInterval(pollHealth, 8000);
 
+  // ============= library =============
   function coverSvg(title, author) {
     let h = 0; for (const c of (title||'?')) h = (h*31 + c.charCodeAt(0)) & 0xffff;
     const hue1 = h % 360, hue2 = (hue1 + 60) % 360;
@@ -170,7 +245,9 @@
   }
 
   async function loadLibrary() {
-    const books = await (await fetch('/api/books')).json();
+    if (!sessionStorage.getItem(AUTH_KEY)) return;
+    let books = [];
+    try { books = await (await authedFetch('/api/books')).json(); } catch { return; }
     const grid = $('#library-grid'), empty = $('#library-empty');
     $('#lib-count').textContent = books.length ? '(' + books.length + ')' : '';
     if (books.length === 0) { grid.innerHTML=''; empty.classList.remove('hidden'); return; }
@@ -186,6 +263,18 @@
       </article>`).join('');
   }
 
+  // ============= upload =============
+  async function loadBackends() {
+    let list = [];
+    try { list = await (await authedFetch('/api/storage')).json(); } catch { return; }
+    const sel = $('#upload-backend');
+    sel.innerHTML = '<option value="local">local</option>' +
+      list.filter(s => s.backend !== 'local' && s.mounted)
+          .map(s => `<option value="${esc(s.backend)}">${esc(s.label)} (${esc(s.backend)}${s.mounted?'':' - NOT MOUNTED'})</option>`)
+          .join('');
+    $('#backend-hint').textContent = 'only mounted cloud backends appear here.';
+  }
+
   const dropzone = $('#dropzone');
   ;['dragenter','dragover'].forEach(ev =>
     dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.add('drop-active'); }));
@@ -197,6 +286,7 @@
   async function uploadFiles(fileList) {
     const files = Array.from(fileList || []);
     if (!files.length) return;
+    const backend = $('#upload-backend').value;
     for (const f of files) {
       if (!f.name.toLowerCase().endsWith('.epub')) {
         toast('Skipped ' + f.name + ' (not .epub)', 'warning'); continue;
@@ -215,9 +305,10 @@
       const status = row.querySelector('.status'), bar = row.querySelector('.bar');
       try {
         status.textContent = 'uploading…'; bar.style.width = '5%';
-        const fd = new FormData(); fd.append('file', f); fd.append('backend', 'local');
+        const fd = new FormData(); fd.append('file', f); fd.append('backend', backend);
         const xhr = new XMLHttpRequest();
         xhr.open('POST', '/upload');
+        for (const [k,v] of Object.entries(authHeader())) xhr.setRequestHeader(k,v);
         xhr.upload.onprogress = (e) => { if (e.lengthComputable) bar.style.width = Math.max(5, Math.round(e.loaded/e.total*95)) + '%'; };
         const j = await new Promise((resolve, reject) => {
           xhr.onload = () => xhr.status >= 200 && xhr.status < 300
@@ -237,8 +328,10 @@
     }
   }
 
+  // ============= metadata =============
   async function loadMetadata() {
-    const list = await (await fetch('/api/metadata')).json();
+    let list = [];
+    try { list = await (await authedFetch('/api/metadata')).json(); } catch { return; }
     $('#metadata-list').innerHTML = list.map(m => `
       <div class="flex items-center gap-2 rounded-md border border-slate-800 bg-ink-950/60 px-2.5 py-1.5" data-id="${m.id}">
         <input type="checkbox" ${m.is_active?'checked':''} class="meta-active accent-indigo-500">
@@ -259,19 +352,19 @@
       priority: parseInt(row.querySelector('.meta-prio').value) || 100,
       api_key_or_url: row.querySelector('.meta-url').value,
     };
-    const r = await fetch('/api/metadata/' + row.dataset.id, {
+    const r = await authedFetch('/api/metadata/' + row.dataset.id, {
       method:'PUT', headers:{'content-type':'application/json'}, body: JSON.stringify(body)
     });
     toast(r.ok ? 'Provider updated' : 'Update failed', r.ok ? 'success' : 'error');
   }
   async function delMeta(row) {
-    await fetch('/api/metadata/' + row.dataset.id, { method:'DELETE' });
+    await authedFetch('/api/metadata/' + row.dataset.id, { method:'DELETE' });
     loadMetadata();
   }
   $('#add-meta-btn').addEventListener('click', async () => {
     const name = prompt('Provider name (internal_opf | google_books | ollama | openai):');
     if (!name) return;
-    const r = await fetch('/api/metadata', {
+    const r = await authedFetch('/api/metadata', {
       method:'POST', headers:{'content-type':'application/json'},
       body: JSON.stringify({ provider_name: name.trim(), is_active: true, priority: 50, api_key_or_url: '' })
     });
@@ -279,19 +372,39 @@
     loadMetadata();
   });
 
+  // ============= storage =============
   async function loadStorage() {
-    const list = await (await fetch('/api/storage')).json();
+    let list = [];
+    try { list = await (await authedFetch('/api/storage')).json(); } catch { return; }
     $('#storage-list').innerHTML = list.map(s => `
       <div class="flex justify-between items-center rounded-md border border-slate-800 bg-ink-950/60 px-3 py-2">
         <div class="text-sm">
           <span class="font-medium">${esc(s.label)}</span>
           <span class="text-slate-500"> · ${esc(s.backend)}</span>
           ${s.remote_name ? '<span class="text-slate-500"> · ' + esc(s.remote_name) + ':' + esc(s.remote_path||'') + '</span>' : ''}
+          <span class="ml-2 text-xs ${s.mounted?'text-emerald-400':'text-amber-400'}">${s.mounted?'● mounted':'○ unmounted'}</span>
         </div>
-        <button data-id="${s.id}" class="text-rose-400 text-xs hover:text-rose-300">delete</button>
+        <div class="flex gap-2 text-xs">
+          ${s.backend!=='local' ? '<button data-act="mount" data-id="'+s.id+'" class="text-indigo-400 hover:text-indigo-300">'+(s.mounted?'remount':'mount')+'</button>' : ''}
+          ${s.backend!=='local' ? '<button data-act="unmount" data-id="'+s.id+'" class="text-amber-400 hover:text-amber-300">unmount</button>' : ''}
+          <button data-act="delete" data-id="${s.id}" class="text-rose-400 hover:text-rose-300">delete</button>
+        </div>
       </div>`).join('') || '<p class="text-xs text-slate-500">No storage configured.</p>';
-    $$('#storage-list button[data-id]').forEach(b =>
-      b.addEventListener('click', async () => { await fetch('/api/storage/'+b.dataset.id,{method:'DELETE'}); loadStorage(); }));
+    $$('#storage-list button[data-act]').forEach(b =>
+      b.addEventListener('click', () => actStorage(b)));
+  }
+  async function actStorage(b) {
+    const id = b.dataset.id, act = b.dataset.act;
+    if (act === 'delete') {
+      await authedFetch('/api/storage/'+id, { method:'DELETE' });
+    } else if (act === 'mount') {
+      const r = await authedFetch('/api/storage/'+id+'/mount', { method:'POST' });
+      const j = await r.json();
+      toast(j.status || 'mount request sent', j.mount_error ? 'error' : 'success');
+    } else if (act === 'unmount') {
+      await authedFetch('/api/storage/'+id+'/unmount', { method:'POST' });
+    }
+    loadStorage(); loadBackends();
   }
   $('#storage-form').addEventListener('submit', async e => {
     e.preventDefault();
@@ -300,16 +413,23 @@
     if (!body.remote_name) body.remote_name = null;
     if (!body.remote_path) body.remote_path = null;
     if (!body.credentials_json) body.credentials_json = null;
-    const r = await fetch('/api/storage', {
+    const r = await authedFetch('/api/storage', {
       method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)
     });
-    const j = await r.json();
-    if (r.ok) toast('Storage saved' + (j.stub ? ' (stub — rclone phase 2)' : ''), j.stub ? 'warning' : 'success');
-    else toast('Save failed', 'error');
-    e.target.reset(); loadStorage();
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) {
+      if (j.mount_error) toast('Saved but mount failed: ' + j.mount_error, 'error');
+      else toast(j.backend === 'local' ? 'Storage saved' : 'Saved and mounted', 'success');
+    } else toast('Save failed', 'error');
+    e.target.reset(); loadStorage(); loadBackends();
   });
 
-  showView('library');
+  // boot
+  if (sessionStorage.getItem(AUTH_KEY)) {
+    document.getElementById('login-overlay').classList.add('hidden');
+    showView('library');
+    loadLibrary();
+  }
   </script>
 </body>
 </html>

@@ -8,9 +8,27 @@ services:
     volumes:
       - ./:/app
       - ./books:/books
+      # Cloud mounts live under the host's bookshelf dir so they survive container restarts
+      # (compose recreates the container, not the host directory tree).
+      - ./mnt:/mnt/cloud:shared
     environment:
       - BOOKS_ROOT=/books
+      # Leave empty to auto-generate on first start (logged once); set both to override.
+      - CODEX_ADMIN_USER=
+      - CODEX_ADMIN_PASSWORD=
     # host networking so the container can reach NAS Ollama without a proxy.
     # If you prefer bridge networking, drop this and set the Ollama URL to
     # http://192.168.1.146:11434/api/generate in the Metadata settings UI.
     network_mode: host
+    # FUSE support for rclone mount --allow-other inside the container.
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse
+    security_opt:
+      - apparmor:unconfined
+    # Required so rclone can create its config file under a writable HOME
+    # and so the kernel forwards FUSE ops for the bind-mounted host dir.
+    tmpfs:
+      - /tmp:exec
+    privileged: false

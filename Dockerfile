@@ -5,17 +5,22 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# rclone for cloud storage backends; curl + ca-certs for build-time fetch
+# rclone for cloud storage backends; curl + ca-certs for build-time fetch;
+# fuse3 for in-container FUSE mounts.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         rclone \
         curl \
         ca-certificates \
+        fuse3 \
+        fuse \
     && rm -rf /var/lib/apt/lists/*
 
-# Tailwind standalone CLI (offline-friendly, no Node, no CDN at runtime)
-# Build the CSS once during image build so the browser never hits a CDN.
-COPY tailwindcss /usr/local/bin/tailwindcss
-RUN chmod +x /usr/local/bin/tailwindcss
+# Tailwind standalone CLI (offline-friendly, no Node, no CDN at runtime).
+# Downloaded at build time so we don't bloat the repo with a 42 MB binary.
+ARG TAILWIND_VERSION=3.4.17
+RUN curl -fsSL -o /usr/local/bin/tailwindcss \
+        "https://github.com/tailwindlabs/tailwindcss/releases/download/v${TAILWIND_VERSION}/tailwindcss-linux-x64" \
+    && chmod +x /usr/local/bin/tailwindcss
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
