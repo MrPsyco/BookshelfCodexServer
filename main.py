@@ -997,7 +997,15 @@ def _opds_root_feed() -> bytes:
         + '<link rel="self"'
         + ' href="/opds"'
         + ' type="application/atom+xml;profile=opds-catalog"/>\n'
-        + '<link rel="http://opds-spec.org/catalog"'
+        # KOReader's OPDS plugin only follows `subsection` (not
+        # `catalog`) as a navigation entry — see
+        # plugins/opds.koplugin/opdsbrowser.lua::catalog_rel. Emit two
+        # <link> elements so both KOReader and spec-strict clients work.
+        + '<link rel="subsection"'
+        + ' href="/opds/books"'
+        + ' type="application/atom+xml;profile=opds-catalog"'
+        + ' title="All books"/>\n'
+        + '<link rel="http://opds-spec.org/subsection"'
         + ' href="/opds/books"'
         + ' type="application/atom+xml;profile=opds-catalog"'
         + ' title="All books"/>\n'
@@ -1169,8 +1177,14 @@ def _epub_cover(path: str) -> tuple[bytes, str] | None:
 
 # ----------------------------------------------------------------- /opds
 @app.get("/opds", response_class=Response)
+@app.head("/opds", response_class=Response)
 def opds_root(user: User = Depends(_require_opds_auth)) -> Response:
-    """OPDS 1.2 catalog root (navigation feed)."""
+    """OPDS 1.2 catalog root (navigation feed).
+
+    Also exposes HEAD so OPDS clients can probe availability without
+    downloading the full XML. (KOReader sends HEAD first, then GET;
+    the spec recommends serving both.)
+    """
     return Response(
         content=_opds_root_feed(),
         media_type="application/atom+xml;profile=opds-catalog",
@@ -1179,6 +1193,7 @@ def opds_root(user: User = Depends(_require_opds_auth)) -> Response:
 
 # ------------------------------------------------------------ /opds/books
 @app.get("/opds/books", response_class=Response)
+@app.head("/opds/books", response_class=Response)
 def opds_books(user: User = Depends(_require_opds_auth), db: Session = Depends(get_db)) -> Response:
     """OPDS 1.2 acquisition feed: every book in the catalog."""
     rows = db.query(Book).order_by(Book.added_at.desc()).all()
