@@ -1,6 +1,8 @@
 library.db
 *.bak
 *.bak-*
+library.db.backup*
+library.db.pre-*
 __pycache__/
 .env
 /books/

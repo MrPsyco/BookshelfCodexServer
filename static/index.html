@@ -14,13 +14,13 @@
     pre { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, monospace; }
   </style>
 </head>
-<body class="bg-ink-950 text-slate-100 min-h-full">
+<body class="bg-slate-950 text-slate-100 min-h-full">
 
   <div id="toasts" class="fixed top-4 right-4 z-50 space-y-2 pointer-events-none"></div>
 
   <!-- =================== Setup Overlay (no admin exists yet) =================== -->
-  <div id="setup-overlay" class="fixed inset-0 z-40 bg-ink-950 grid place-items-center px-4">
-    <form id="setup-form" class="w-full max-w-md rounded-xl border border-slate-800 bg-ink-900 p-7 space-y-5 shadow-2xl">
+  <div id="setup-overlay" class="fixed inset-0 z-40 min-h-screen flex items-center justify-center bg-slate-950 px-4">
+    <form id="setup-form" class="w-full max-w-md p-8 bg-slate-900 rounded-xl shadow-xl border border-slate-800 space-y-5">
       <div class="flex items-center gap-3">
         <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-500 via-fuchsia-500 to-rose-500 grid place-items-center font-black text-white">C</div>
         <div>
@@ -36,43 +36,48 @@
         <label class="text-xs text-slate-400">Username</label>
         <input id="setup-user" type="text" required minlength="3" maxlength="60"
                autocomplete="username"
-               class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+               class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
       </div>
       <div>
         <label class="text-xs text-slate-400">Password</label>
         <input id="setup-pass" type="password" required minlength="8"
                autocomplete="new-password"
-               class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+               class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
         <p class="text-[11px] text-slate-500 mt-1">8 characters minimum. No character-class rules - just length.</p>
       </div>
       <div>
         <label class="text-xs text-slate-400">Confirm password</label>
         <input id="setup-pass2" type="password" required minlength="8"
                autocomplete="new-password"
-               class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+               class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
       </div>
-      <button class="w-full bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium">Create admin account &amp; sign in</button>
+      <button class="w-full bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium">Create admin account & sign in</button>
       <p id="setup-error" class="text-xs text-rose-400 hidden"></p>
     </form>
   </div>
 
   <!-- =================== Login Overlay ===================================== -->
-  <div id="login-overlay" class="hidden fixed inset-0 z-40 bg-ink-950/90 grid place-items-center">
-    <form id="login-form" class="w-80 rounded-xl border border-slate-800 bg-ink-900 p-6 space-y-3 shadow-2xl">
-      <h2 class="text-lg font-semibold">Sign in</h2>
-      <p class="text-xs text-slate-500">Admin account only. KOReader uses Basic Auth on /sync/*</p>
+  <div id="login-overlay" class="hidden fixed inset-0 z-40 min-h-screen flex items-center justify-center bg-slate-950/85 px-4">
+    <form id="login-form" class="w-full max-w-md p-8 bg-slate-900 rounded-xl shadow-xl border border-slate-800 space-y-3">
+      <div class="flex items-center gap-3 mb-2">
+        <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-500 via-fuchsia-500 to-rose-500 grid place-items-center font-black text-white">C</div>
+        <div>
+          <h2 class="text-lg font-semibold leading-none">Sign in</h2>
+          <p class="text-xs text-slate-500 mt-1">Admin account only - KOReader uses Basic Auth on /sync/*</p>
+        </div>
+      </div>
       <input id="login-user" type="text" placeholder="username" autocomplete="username" required
-             class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+             class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
       <input id="login-pass" type="password" placeholder="password" autocomplete="current-password" required
-             class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+             class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
       <button class="w-full bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 rounded text-sm font-medium">Sign in</button>
       <p id="login-error" class="text-xs text-rose-400 hidden"></p>
     </form>
   </div>
 
   <!-- =================== OAuth Connect Modal ============================== -->
-  <div id="oauth-modal" class="fixed inset-0 z-40 hidden bg-ink-950/85 grid place-items-center px-4">
-    <div class="w-full max-w-xl rounded-xl border border-slate-700 bg-ink-900 shadow-2xl">
+  <div id="oauth-modal" class="fixed inset-0 z-50 hidden bg-black/70 flex items-center justify-center px-4">
+    <div class="w-full max-w-xl rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
       <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800">
         <h2 id="oauth-title" class="font-semibold">Connect cloud drive</h2>
         <button id="oauth-close" class="text-slate-500 hover:text-slate-200 text-xl leading-none">&times;</button>
@@ -80,7 +85,7 @@
       <div class="p-5 space-y-4">
         <div id="oauth-state-pending">
           <p class="text-sm text-slate-300 mb-2">To connect, you'll need <code>rclone</code> on a machine with a browser:</p>
-          <pre id="oauth-instructions" class="rounded-lg bg-ink-950 border border-slate-800 p-3 text-xs text-slate-300"></pre>
+          <pre id="oauth-instructions" class="rounded-lg bg-slate-950 border border-slate-800 p-3 text-xs text-slate-300"></pre>
           <p class="text-xs text-slate-500 mt-3">
             When rclone prints a JSON token line, paste it below and click <em>Complete connection</em>.
           </p>
@@ -94,7 +99,7 @@
         <div>
           <label class="text-xs text-slate-400">Token blob (JSON from <code>rclone authorize</code>):</label>
           <textarea id="oauth-token" rows="4"
-                    class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-xs"
+                    class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-xs"
                     placeholder='{"access_token":"...","expires":...}'></textarea>
         </div>
         <div class="flex justify-end gap-2">
@@ -106,8 +111,8 @@
   </div>
 
   <!-- =================== Add Metadata Provider Modal ====================== -->
-  <div id="add-meta-modal" class="fixed inset-0 z-40 hidden bg-ink-950/85 grid place-items-center px-4">
-    <form id="add-meta-form" class="w-full max-w-lg rounded-xl border border-slate-700 bg-ink-900 shadow-2xl">
+  <div id="add-meta-modal" class="fixed inset-0 z-50 hidden bg-black/70 flex items-center justify-center px-4">
+    <form id="add-meta-form" class="w-full max-w-lg rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
       <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800">
         <h2 class="font-semibold">Add metadata provider</h2>
         <button type="button" id="add-meta-close" class="text-slate-500 hover:text-slate-200 text-xl leading-none">&times;</button>
@@ -115,13 +120,13 @@
       <div class="p-5 space-y-4">
         <div>
           <label class="text-xs text-slate-400">Provider</label>
-          <select id="add-meta-provider" class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm"></select>
+          <select id="add-meta-provider" class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm"></select>
         </div>
-        <div id="add-meta-desc" class="rounded-md bg-ink-950/60 border border-slate-800 p-3 text-xs text-slate-400 leading-relaxed"></div>
+        <div id="add-meta-desc" class="rounded-md bg-slate-950/60 border border-slate-800 p-3 text-xs text-slate-400 leading-relaxed"></div>
         <div id="add-meta-key-field">
           <label class="text-xs text-slate-400">API key / endpoint URL</label>
           <input id="add-meta-key" type="text"
-                 class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-xs font-mono"
+                 class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-xs font-mono"
                  placeholder="Google Books API key (optional) or Ollama endpoint URL" />
           <p class="text-[11px] text-slate-500 mt-1">Only relevant for <code>google_books</code> (API key) or <code>ollama</code> (URL). Internal OPF reads from the EPUB file itself and takes no input.</p>
         </div>
@@ -129,7 +134,7 @@
           <div>
             <label class="text-xs text-slate-400">Priority (lower = runs first)</label>
             <input id="add-meta-prio" type="number" value="50" min="1" max="999"
-                   class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+                   class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
           </div>
           <div class="flex items-end">
             <label class="inline-flex items-center gap-2 text-sm text-slate-300">
@@ -148,8 +153,8 @@
   </div>
 
   <!-- =================== Add KOReader User Modal ========================= -->
-  <div id="add-kuser-modal" class="fixed inset-0 z-40 hidden bg-ink-950/85 grid place-items-center px-4">
-    <form id="add-kuser-form" class="w-full max-w-md rounded-xl border border-slate-700 bg-ink-900 shadow-2xl">
+  <div id="add-kuser-modal" class="fixed inset-0 z-50 hidden bg-black/70 flex items-center justify-center px-4">
+    <form id="add-kuser-form" class="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
       <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800">
         <h2 class="font-semibold">Add KOReader user</h2>
         <button type="button" id="add-kuser-close" class="text-slate-500 hover:text-slate-200 text-xl leading-none">&times;</button>
@@ -163,12 +168,12 @@
         <div>
           <label class="text-xs text-slate-400">Username (device name)</label>
           <input id="add-kuser-name" type="text" required
-                 class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+                 class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
         </div>
         <div>
           <label class="text-xs text-slate-400">Password</label>
           <input id="add-kuser-pass" type="password"
-                 class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+                 class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
           <p class="text-[11px] text-slate-500 mt-1">Leave empty to auto-generate one (shown once).</p>
         </div>
         <p id="add-kuser-error" class="text-xs text-rose-400 hidden"></p>
@@ -181,8 +186,8 @@
   </div>
 
   <!-- =================== Generated Password Modal (KOReader) ============ -->
-  <div id="kpw-modal" class="fixed inset-0 z-40 hidden bg-ink-950/85 grid place-items-center px-4">
-    <div class="w-full max-w-md rounded-xl border border-slate-700 bg-ink-900 shadow-2xl">
+  <div id="kpw-modal" class="fixed inset-0 z-50 hidden bg-black/70 flex items-center justify-center px-4">
+    <div class="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
       <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800">
         <h2 class="font-semibold">Generated KOReader password</h2>
         <button id="kpw-close" class="text-slate-500 hover:text-slate-200 text-xl leading-none">&times;</button>
@@ -193,7 +198,7 @@
           KOReader under <em>Setup &rarr; Sync &rarr; Custom server credentials</em>.
         </p>
         <div class="flex items-center gap-2">
-          <code id="kpw-value" class="flex-1 rounded-md bg-ink-950 border border-slate-800 px-3 py-2 text-sm font-mono"></code>
+          <code id="kpw-value" class="flex-1 rounded-md bg-slate-950 border border-slate-800 px-3 py-2 text-sm font-mono"></code>
           <button id="kpw-copy" class="px-3 py-1.5 text-sm border border-slate-700 rounded hover:bg-slate-800">copy</button>
         </div>
         <div class="flex justify-end pt-1">
@@ -204,7 +209,7 @@
   </div>
 
   <!-- =================== Header / Navigation ============================== -->
-  <header id="app-header" class="hidden border-b border-slate-800/80 bg-ink-900/70 backdrop-blur sticky top-0 z-30">
+  <header id="app-header" class="hidden border-b border-slate-800/80 bg-slate-900/70 backdrop-blur sticky top-0 z-30">
     <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
       <div class="flex items-center gap-3">
         <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 via-fuchsia-500 to-rose-500 grid place-items-center font-black text-white">C</div>
@@ -245,12 +250,12 @@
       <h2 class="text-lg font-semibold tracking-tight mb-5">Upload EPUB</h2>
       <div class="mb-3 flex items-center gap-2 text-sm">
         <label class="text-slate-400">Backend:</label>
-        <select id="upload-backend" class="bg-ink-950 border border-slate-800 rounded px-2 py-1 text-sm">
+        <select id="upload-backend" class="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-sm">
           <option value="local">local</option>
         </select>
         <span id="backend-hint" class="text-xs text-slate-500"></span>
       </div>
-      <div id="dropzone" class="rounded-2xl border-2 border-dashed border-slate-700 bg-ink-900/40 p-12 text-center transition">
+      <div id="dropzone" class="rounded-2xl border-2 border-dashed border-slate-700 bg-slate-900/40 p-12 text-center transition">
         <p class="mt-2 text-slate-300">Drop one or more <code>.epub</code> files here</p>
         <p class="text-xs text-slate-500 mt-1">or</p>
         <label class="mt-2 inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-md text-sm font-medium cursor-pointer">
@@ -264,7 +269,7 @@
     <section id="view-settings" class="view hidden">
       <h2 class="text-lg font-semibold tracking-tight mb-5">Settings</h2>
       <div class="grid lg:grid-cols-3 gap-6">
-        <div class="rounded-xl border border-slate-800 bg-ink-900/40 p-5">
+        <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
           <div class="flex items-center justify-between mb-3">
             <h3 class="font-medium">Metadata Providers</h3>
             <button id="add-meta-btn" class="text-xs text-indigo-400 hover:text-indigo-300">+ add</button>
@@ -276,7 +281,7 @@
           <div id="metadata-list" class="space-y-2"></div>
         </div>
 
-        <div class="rounded-xl border border-slate-800 bg-ink-900/40 p-5">
+        <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
           <div class="flex items-center justify-between mb-3">
             <h3 class="font-medium">Storage Backends</h3>
           </div>
@@ -286,8 +291,8 @@
           </p>
           <form id="storage-form" class="space-y-2">
             <input name="label" required placeholder="Label (e.g. My GDrive)"
-                   class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
-            <select name="backend" id="storage-backend" class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm">
+                   class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+            <select name="backend" id="storage-backend" class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm">
               <option value="local">Lokales NAS (default)</option>
               <option value="gdrive">Google Drive</option>
               <option value="onedrive">OneDrive</option>
@@ -297,12 +302,12 @@
             </select>
             <div class="grid grid-cols-2 gap-2">
               <input name="remote_name" placeholder="rclone remote name"
-                     class="bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+                     class="bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
               <input name="remote_path" placeholder="/Books (subfolder)"
-                     class="bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+                     class="bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
             </div>
             <textarea name="credentials_json" rows="3" id="credentials-json" placeholder='For gdrive/onedrive/dropbox/s3: {"token":"..."} or vendor-specific JSON. For webdav: {"url":"https://...","user":"...","pass":"..."}'
-                      class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-xs font-mono"></textarea>
+                      class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-xs font-mono"></textarea>
             <div class="flex gap-2">
               <button id="save-storage" class="flex-1 bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 rounded text-sm font-medium">Save &amp; mount</button>
               <button type="button" id="connect-oauth" class="hidden bg-emerald-700 hover:bg-emerald-600 px-3 py-1.5 rounded text-sm font-medium">Connect with OAuth</button>
@@ -311,7 +316,7 @@
           <div id="storage-list" class="mt-4 space-y-1 text-sm"></div>
         </div>
 
-        <div class="rounded-xl border border-slate-800 bg-ink-900/40 p-5">
+        <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
           <div class="flex items-center justify-between mb-3">
             <h3 class="font-medium">KOReader Users</h3>
             <button id="add-kuser-btn" class="text-xs text-indigo-400 hover:text-indigo-300">+ add</button>
@@ -531,7 +536,7 @@
     if (books.length === 0) { grid.innerHTML=''; empty.classList.remove('hidden'); return; }
     empty.classList.add('hidden');
     grid.innerHTML = books.map(b => `
-      <article class="rounded-xl overflow-hidden cover-shadow bg-ink-900/40 border border-slate-800/60 hover:border-slate-700 transition">
+      <article class="rounded-xl overflow-hidden cover-shadow bg-slate-900/40 border border-slate-800/60 hover:border-slate-700 transition">
         <div class="aspect-[5/7] bg-slate-800">${coverSvg(b.title, b.author)}</div>
         <div class="p-3">
           <div class="text-sm font-medium leading-snug line-clamp-2">${esc(b.title)}</div>
@@ -570,7 +575,7 @@
         toast('Skipped ' + f.name + ' (not .epub)', 'warning'); continue;
       }
       const row = document.createElement('div');
-      row.className = 'rounded-lg border border-slate-800 bg-ink-900/40 p-3';
+      row.className = 'rounded-lg border border-slate-800 bg-slate-900/40 p-3';
       row.innerHTML = `
         <div class="flex items-center justify-between text-sm">
           <span class="truncate">${esc(f.name)}</span>
@@ -626,19 +631,19 @@
     $('#metadata-list').innerHTML = list.map(m => {
       const desc = PROVIDER_DESC[m.provider_name] || '';
       return `
-      <div class="rounded-md border border-slate-800 bg-ink-950/60 px-2.5 py-1.5" data-id="${m.id}">
+      <div class="rounded-md border border-slate-800 bg-slate-950/60 px-2.5 py-1.5" data-id="${m.id}">
         <div class="flex items-center gap-2">
           <input type="checkbox" ${m.is_active?'checked':''} class="meta-active accent-indigo-500">
           <span class="flex-1 text-sm font-medium">${esc(m.provider_name)}</span>
           <span class="text-[10px] text-slate-500">prio</span>
-          <input type="number" value="${m.priority}" class="meta-prio w-14 bg-ink-950 border border-slate-800 rounded px-2 py-0.5 text-xs">
+          <input type="number" value="${m.priority}" class="meta-prio w-14 bg-slate-950 border border-slate-800 rounded px-2 py-0.5 text-xs">
           <button class="meta-save text-xs text-indigo-400 hover:text-indigo-300 px-1">save</button>
           <button class="meta-del text-xs text-rose-400 hover:text-rose-300 px-1">x</button>
         </div>
         ${desc ? '<p class="mt-1.5 text-[11px] text-slate-500 leading-relaxed">' + desc + '</p>' : ''}
         <div class="mt-1.5">
           <input type="text" value="${esc(m.api_key_or_url||'')}" placeholder="${m.provider_name === 'ollama' ? 'http://ollama-host:11434/api/generate' : m.provider_name === 'google_books' ? 'Google Books API key (optional)' : 'API key / endpoint URL'}"
-                 class="meta-url w-full bg-ink-950 border border-slate-800 rounded px-2 py-0.5 text-xs font-mono">
+                 class="meta-url w-full bg-slate-950 border border-slate-800 rounded px-2 py-0.5 text-xs font-mono">
         </div>
       </div>`;
     }).join('') || '<p class="text-xs text-slate-500">No providers configured.</p>';
@@ -753,7 +758,7 @@
             ? '<span class="text-amber-400">● auth-pending</span>'
             : '';
       return `
-      <div class="flex justify-between items-center rounded-md border border-slate-800 bg-ink-950/60 px-3 py-2">
+      <div class="flex justify-between items-center rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
         <div class="text-sm">
           <span class="font-medium">${esc(s.label)}</span>
           <span class="text-slate-500"> · ${esc(s.backend)}</span>
@@ -899,7 +904,7 @@
     let list = [];
     try { list = await (await authedFetch('/api/koreader/users')).json(); } catch { return; }
     $('#kusers-list').innerHTML = list.map(u => `
-      <div class="flex items-center justify-between rounded-md border border-slate-800 bg-ink-950/60 px-3 py-1.5" data-id="${u.id}">
+      <div class="flex items-center justify-between rounded-md border border-slate-800 bg-slate-950/60 px-3 py-1.5" data-id="${u.id}">
         <div>
           <span class="text-sm font-medium">${esc(u.username)}</span>
           <span class="ml-2 text-[11px] ${u.has_password?'text-emerald-400':'text-slate-500'}">${u.has_password?'● pw set':'○ no password'}</span>
