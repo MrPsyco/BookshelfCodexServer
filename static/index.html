@@ -328,6 +328,18 @@
           </p>
           <div id="kusers-list" class="space-y-1 text-sm"></div>
         </div>
+
+        <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-medium">KOReader Sync Activity</h3>
+            <span id="kosync-summary" class="text-[11px] text-slate-500"></span>
+          </div>
+          <p class="text-xs text-slate-500 mb-3">
+            Reading positions pushed by KOReader clients. Books with a matching
+            file show their title; others appear as <code>unmatched:<hash></code>.
+          </p>
+          <div id="kosync-list" class="space-y-1 text-sm"></div>
+        </div>
       </div>
     </section>
   </main>
@@ -913,6 +925,39 @@
       </div>
     `).join('') || '<p class="text-xs text-slate-500">No KOReader users yet.</p>';
     $$('.kuser-del').forEach(b => b.addEventListener('click', () => delKUser(b.closest('[data-id]'))));
+  loadKoreaderSync();
+  }
+  async function loadKoreaderSync() {
+    let list = [];
+    try { list = await (await authedFetch('/api/koreader/progress')).json(); } catch { return; }
+    if (!list.length) {
+      $('#kosync-list').innerHTML = '<p class="text-xs text-slate-500">No sync activity yet. Open a book in KOReader to see the first reading position here.</p>';
+      $('#kosync-summary').textContent = '';
+      return;
+    }
+    $('#kosync-summary').textContent = list.length + ' position' + (list.length===1?'':'s');
+    const when = ts => {
+      if (!ts) return '';
+      try { return new Date(ts * 1000).toLocaleString(); } catch { return ''; }
+    };
+    $('#kosync-list').innerHTML = list.map(p => {
+      const label = p.title
+        ? `<span class="text-sm font-medium text-slate-100">${esc(p.title)}</span><span class="text-[11px] text-slate-500 ml-2">${esc(p.author||'')}</span>`
+        : `<span class="text-xs font-mono text-slate-400">unmatched:<span class="text-slate-500">${esc(p.document.substring(0,16))}…</span></span>`;
+      const pct = (typeof p.percentage === 'number') ? Math.round(p.percentage*100) + '%' : '';
+      return `
+        <div class="rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
+          <div class="flex items-baseline justify-between gap-2">
+            ${label}
+            <span class="text-xs text-indigo-300 font-mono whitespace-nowrap">${pct}</span>
+          </div>
+          <div class="flex items-center justify-between text-[11px] text-slate-500 mt-0.5">
+            <span>user <span class="text-slate-300">${esc(p.username||'')}</span> · device <span class="text-slate-300">${esc(p.device||'')}</span></span>
+            <span>${when(p.timestamp)}</span>
+          </div>
+        </div>
+      `;
+    }).join('');
   }
   async function delKUser(row) {
     await authedFetch('/api/koreader/users/' + row.dataset.id, { method:'DELETE' });
