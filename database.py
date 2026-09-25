@@ -1,6 +1,6 @@
 """SQLAlchemy engine + session setup for CodexServer."""
 from pathlib import Path
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text, inspect
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 DB_PATH = Path(__file__).parent / "library.db"
@@ -24,11 +24,27 @@ def get_db():
         db.close()
 
 
+def _ensure_columns() -> None:
+    """Idempotent migration: add columns introduced after v0.1 without dropping tables.
+
+    `library.db` is a live database; never use drop_all/create_all to apply schema
+    changes. Instead, inspect the table and ALTER TABLE ADD COLUMN if missing.
+    """
+    insp = inspect(engine)
+    if not insp.has_table("storage_configs"):
+        return
+    cols = {c["name"] for c in insp.get_columns("storage_configs")}
+    if "auth_status" not in cols:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE storage_configs ADD COLUMN auth_status TEXT"))
+
+
 def init_db() -> None:
-    """Create all tables and seed default metadata providers if empty."""
+    """Create all tables, run idempotent migrations, seed defaults if empty."""
     from models import MetadataConfig  # local import: avoids circular at import time
 
     Base.metadata.create_all(bind=engine)
+    _ensure_columns()
 
     with SessionLocal() as db:
         if db.query(MetadataConfig).count() == 0:

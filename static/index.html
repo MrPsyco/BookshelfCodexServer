@@ -11,13 +11,14 @@
     .drop-active { outline: 2px dashed rgb(99 102 241); outline-offset: -8px; background: rgba(99,102,241,0.08); }
     .pulse-dot { animation: pulse 1.6s ease-in-out infinite; }
     @keyframes pulse { 0%,100% { opacity:.4 } 50% { opacity:1 } }
+    pre { white-space: pre-wrap; word-break: break-word; }
   </style>
 </head>
 <body class="bg-ink-950 text-slate-100 min-h-full">
 
   <div id="toasts" class="fixed top-4 right-4 z-50 space-y-2 pointer-events-none"></div>
 
-  <!-- Login modal: shown until auth succeeds -->
+  <!-- Login overlay -->
   <div id="login-overlay" class="fixed inset-0 z-40 bg-ink-950/90 grid place-items-center">
     <form id="login-form" class="w-80 rounded-xl border border-slate-800 bg-ink-900 p-6 space-y-3 shadow-2xl">
       <h2 class="text-lg font-semibold">CodexServer login</h2>
@@ -29,6 +30,41 @@
       <button class="w-full bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 rounded text-sm font-medium">Sign in</button>
       <p id="login-error" class="text-xs text-rose-400 hidden"></p>
     </form>
+  </div>
+
+  <!-- OAuth connect modal -->
+  <div id="oauth-modal" class="fixed inset-0 z-40 hidden bg-ink-950/85 grid place-items-center px-4">
+    <div class="w-full max-w-xl rounded-xl border border-slate-700 bg-ink-900 shadow-2xl">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800">
+        <h2 id="oauth-title" class="font-semibold">Connect cloud drive</h2>
+        <button id="oauth-close" class="text-slate-500 hover:text-slate-200 text-xl leading-none">&times;</button>
+      </div>
+      <div class="p-5 space-y-4">
+        <div id="oauth-state-pending">
+          <p class="text-sm text-slate-300 mb-2">To connect, you'll need <code>rclone</code> on a machine with a browser:</p>
+          <pre id="oauth-instructions" class="rounded-lg bg-ink-950 border border-slate-800 p-3 text-xs text-slate-300 font-mono"></pre>
+          <p class="text-xs text-slate-500 mt-3">
+            When rclone prints a JSON token line, paste it below and click <em>Complete connection</em>.
+          </p>
+        </div>
+        <div id="oauth-state-complete" class="hidden">
+          <p class="text-emerald-400 text-sm">Connected. Mounted.</p>
+        </div>
+        <div id="oauth-state-error" class="hidden">
+          <p id="oauth-error" class="text-rose-400 text-sm"></p>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400">Token blob (JSON from <code>rclone authorize</code>):</label>
+          <textarea id="oauth-token" rows="4"
+                    class="mt-1 w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-xs font-mono"
+                    placeholder='{"access_token":"...","expires":...}'></textarea>
+        </div>
+        <div class="flex justify-end gap-2">
+          <button id="oauth-cancel" class="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-200">Cancel</button>
+          <button id="oauth-complete" class="px-3 py-1.5 rounded text-sm bg-indigo-600 hover:bg-indigo-500 font-medium">Complete connection</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <header class="border-b border-slate-800/80 bg-ink-900/70 backdrop-blur sticky top-0 z-30">
@@ -108,7 +144,7 @@
           <form id="storage-form" class="space-y-2">
             <input name="label" required placeholder="Label (e.g. My GDrive)"
                    class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
-            <select name="backend" class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm">
+            <select name="backend" id="storage-backend" class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm">
               <option value="local">Lokales NAS</option>
               <option value="gdrive">Google Drive</option>
               <option value="onedrive">OneDrive</option>
@@ -122,9 +158,12 @@
               <input name="remote_path" placeholder="/Books"
                      class="bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
             </div>
-            <textarea name="credentials_json" rows="3" placeholder='For gdrive/onedrive/dropbox/s3: {"token":"..."} or vendor-specific JSON. For webdav: {"url":"https://...","user":"...","pass":"..."}'
+            <textarea name="credentials_json" rows="3" id="credentials-json" placeholder='For gdrive/onedrive/dropbox/s3: {"token":"..."} or vendor-specific JSON. For webdav: {"url":"https://...","user":"...","pass":"..."}'
                       class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-xs font-mono"></textarea>
-            <button class="bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 rounded text-sm font-medium">Save &amp; mount</button>
+            <div class="flex gap-2">
+              <button id="save-storage" class="flex-1 bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 rounded text-sm font-medium">Save &amp; mount</button>
+              <button type="button" id="connect-oauth" class="hidden bg-emerald-700 hover:bg-emerald-600 px-3 py-1.5 rounded text-sm font-medium">Connect with OAuth</button>
+            </div>
           </form>
           <div id="storage-list" class="mt-4 space-y-1 text-sm"></div>
         </div>
@@ -134,8 +173,6 @@
 
   <script>
   // ============= auth =============
-  // We store creds in sessionStorage so a refresh keeps you signed in
-  // for the tab lifetime. sessionStorage is per-tab and clears on close.
   const AUTH_KEY = 'codex_auth';
 
   function setCreds(user, pass) {
@@ -373,23 +410,56 @@
   });
 
   // ============= storage =============
+  const OAUTH_BACKENDS = new Set(['gdrive', 'onedrive', 'dropbox', 'box']);
+
+  // Toggle "Connect with OAuth" button visibility based on backend choice.
+  function refreshOAuthButton() {
+    const b = $('#storage-backend').value;
+    $('#connect-oauth').classList.toggle('hidden', !OAUTH_BACKENDS.has(b));
+    // Also clear the credentials_json placeholder hint when OAuth applies.
+    const hint = $('#credentials-json');
+    if (OAUTH_BACKENDS.has(b)) {
+      hint.placeholder = 'Leave empty for OAuth flow, or paste credentials manually.';
+    } else if (b === 'webdav') {
+      hint.placeholder = '{"url":"https://...","user":"...","pass":"..."}';
+    } else if (b === 's3') {
+      hint.placeholder = '{"provider":"AWS","access_key_id":"...","secret_access_key":"...","region":"...","endpoint":"..."}';
+    } else {
+      hint.placeholder = '(no credentials required)';
+    }
+  }
+  $('#storage-backend').addEventListener('change', refreshOAuthButton);
+  refreshOAuthButton();
+
   async function loadStorage() {
     let list = [];
     try { list = await (await authedFetch('/api/storage')).json(); } catch { return; }
-    $('#storage-list').innerHTML = list.map(s => `
+    $('#storage-list').innerHTML = list.map(s => {
+      const authState = s.auth ? s.auth.state : 'idle';
+      const authBadge = authState === 'complete'
+        ? '<span class="text-emerald-400">● authorized</span>'
+        : authState === 'error'
+          ? '<span class="text-rose-400">● auth-error</span>'
+          : authState === 'pending'
+            ? '<span class="text-amber-400">● auth-pending</span>'
+            : '';
+      return `
       <div class="flex justify-between items-center rounded-md border border-slate-800 bg-ink-950/60 px-3 py-2">
         <div class="text-sm">
           <span class="font-medium">${esc(s.label)}</span>
           <span class="text-slate-500"> · ${esc(s.backend)}</span>
           ${s.remote_name ? '<span class="text-slate-500"> · ' + esc(s.remote_name) + ':' + esc(s.remote_path||'') + '</span>' : ''}
           <span class="ml-2 text-xs ${s.mounted?'text-emerald-400':'text-amber-400'}">${s.mounted?'● mounted':'○ unmounted'}</span>
+          ${authBadge ? '<span class="ml-2 text-xs">' + authBadge + '</span>' : ''}
         </div>
         <div class="flex gap-2 text-xs">
+          ${OAUTH_BACKENDS.has(s.backend) ? '<button data-act="oauth" data-id="'+s.id+'" class="text-emerald-400 hover:text-emerald-300">connect</button>' : ''}
           ${s.backend!=='local' ? '<button data-act="mount" data-id="'+s.id+'" class="text-indigo-400 hover:text-indigo-300">'+(s.mounted?'remount':'mount')+'</button>' : ''}
           ${s.backend!=='local' ? '<button data-act="unmount" data-id="'+s.id+'" class="text-amber-400 hover:text-amber-300">unmount</button>' : ''}
           <button data-act="delete" data-id="${s.id}" class="text-rose-400 hover:text-rose-300">delete</button>
         </div>
-      </div>`).join('') || '<p class="text-xs text-slate-500">No storage configured.</p>';
+      </div>`;
+    }).join('') || '<p class="text-xs text-slate-500">No storage configured.</p>';
     $$('#storage-list button[data-act]').forEach(b =>
       b.addEventListener('click', () => actStorage(b)));
   }
@@ -399,13 +469,103 @@
       await authedFetch('/api/storage/'+id, { method:'DELETE' });
     } else if (act === 'mount') {
       const r = await authedFetch('/api/storage/'+id+'/mount', { method:'POST' });
-      const j = await r.json();
+      const j = await r.json().catch(() => ({}));
       toast(j.status || 'mount request sent', j.mount_error ? 'error' : 'success');
     } else if (act === 'unmount') {
       await authedFetch('/api/storage/'+id+'/unmount', { method:'POST' });
+    } else if (act === 'oauth') {
+      openOAuthModal(id);
     }
     loadStorage(); loadBackends();
   }
+
+  // ============= OAuth modal =============
+  let _oauthStorageId = null;
+  async function openOAuthModal(sid) {
+    _oauthStorageId = sid;
+    $('#oauth-modal').classList.remove('hidden');
+    $('#oauth-state-pending').classList.add('hidden');
+    $('#oauth-state-complete').classList.add('hidden');
+    $('#oauth-state-error').classList.add('hidden');
+    $('#oauth-token').value = '';
+    try {
+      const r = await authedFetch('/api/storage/' + sid + '/auth_start', { method:'POST' });
+      const j = await r.json();
+      if (!r.ok) {
+        $('#oauth-state-error').classList.remove('hidden');
+        $('#oauth-error').textContent = j.detail || ('HTTP ' + r.status);
+        return;
+      }
+      $('#oauth-title').textContent = 'Connect ' + (j.backend || '') + (j.remote_name ? ' (' + j.remote_name + ')' : '');
+      $('#oauth-instructions').textContent = j.instructions || '';
+      $('#oauth-state-pending').classList.remove('hidden');
+    } catch (e) {
+      $('#oauth-state-error').classList.remove('hidden');
+      $('#oauth-error').textContent = 'Failed to fetch instructions: ' + e.message;
+    }
+  }
+  function closeOAuthModal() {
+    $('#oauth-modal').classList.add('hidden');
+    _oauthStorageId = null;
+    loadStorage(); loadBackends();
+  }
+  $('#oauth-close').addEventListener('click', closeOAuthModal);
+  $('#oauth-cancel').addEventListener('click', closeOAuthModal);
+  $('#oauth-complete').addEventListener('click', async () => {
+    if (!_oauthStorageId) return;
+    const blob = $('#oauth-token').value.trim();
+    if (!blob) {
+      $('#oauth-state-error').classList.remove('hidden');
+      $('#oauth-error').textContent = 'Paste the JSON token first.';
+      return;
+    }
+    try {
+      const r = await authedFetch('/api/storage/' + _oauthStorageId + '/auth_complete', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token_blob: blob, mode: 'auto' })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        $('#oauth-state-pending').classList.add('hidden');
+        $('#oauth-state-error').classList.add('hidden');
+        $('#oauth-state-complete').classList.remove('hidden');
+        toast('Connected and mounted', 'success');
+        setTimeout(closeOAuthModal, 1200);
+      } else {
+        $('#oauth-state-pending').classList.add('hidden');
+        $('#oauth-state-complete').classList.add('hidden');
+        $('#oauth-state-error').classList.remove('hidden');
+        $('#oauth-error').textContent = j.detail || ('HTTP ' + r.status);
+      }
+    } catch (e) {
+      $('#oauth-state-error').classList.remove('hidden');
+      $('#oauth-error').textContent = e.message;
+    }
+  });
+
+  // "Connect with OAuth" button on the form: save the form, then open the modal.
+  $('#connect-oauth').addEventListener('click', async () => {
+    const form = $('#storage-form');
+    const fd = new FormData(form);
+    const body = Object.fromEntries(fd.entries());
+    body.is_active = true;
+    if (!body.remote_name) { toast('remote_name is required for cloud backends', 'warning'); return; }
+    if (!body.credentials_json) body.credentials_json = null;
+    try {
+      const r = await authedFetch('/api/storage', {
+        method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { toast('Save failed: ' + (j.detail || r.status), 'error'); return; }
+      form.reset(); refreshOAuthButton();
+      loadStorage(); loadBackends();
+      openOAuthModal(j.id);
+    } catch (e) {
+      toast('Save failed: ' + e.message, 'error');
+    }
+  });
+
   $('#storage-form').addEventListener('submit', async e => {
     e.preventDefault();
     const body = Object.fromEntries(new FormData(e.target).entries());
@@ -419,9 +579,10 @@
     const j = await r.json().catch(() => ({}));
     if (r.ok) {
       if (j.mount_error) toast('Saved but mount failed: ' + j.mount_error, 'error');
-      else toast(j.backend === 'local' ? 'Storage saved' : 'Saved and mounted', 'success');
-    } else toast('Save failed', 'error');
-    e.target.reset(); loadStorage(); loadBackends();
+      else toast(j.backend === 'local' ? 'Storage saved' : 'Saved', 'success');
+    } else toast('Save failed: ' + (j.detail || r.status), 'error');
+    e.target.reset(); refreshOAuthButton();
+    loadStorage(); loadBackends();
   });
 
   // boot

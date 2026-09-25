@@ -1,8 +1,9 @@
 library.db
+*.bak
+*.bak-*
 __pycache__/
 .env
 /books/
 .DS_Store
 *.db-journal
-
 tailwindcss

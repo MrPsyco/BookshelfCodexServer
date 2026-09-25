@@ -53,8 +53,11 @@ class StorageConfig(Base):
     backend = Column(String(50), nullable=False)             # local | gdrive | onedrive | dropbox | webdav | s3
     remote_name = Column(String(120), nullable=True)         # rclone remote name
     remote_path = Column(String(500), nullable=True)         # subdir inside the remote
-    credentials_json = Column(Text, nullable=True)           # for gdrive/onedrive/dropbox: oauth JSON or token blob
+    credentials_json = Column(Text, nullable=True)           # oauth JSON / token blob snapshot
     is_active = Column(Boolean, default=True, nullable=False)
+    # JSON snapshot of the latest OAuth/auth flow state.
+    # Shape: {"state":"idle|pending|complete|error", "backend": "...", "instructions": "...", "error": "..."}
+    auth_status = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 

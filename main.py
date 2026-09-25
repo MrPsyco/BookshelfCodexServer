@@ -1,15 +1,23 @@
-"""CodexServer - FastAPI entrypoint (v0.2: auth + rclone FUSE mounts).
+"""CodexServer - FastAPI entrypoint (v0.3: manual OAuth/token handoff for cloud backends).
+
+OAuth model: rclone v1.60 has no true Device-Code-Flow (no google.com/device + user_code).
+Instead we surface rclone's own `rclone authorize <backend>` instructions and let the user
+paste the resulting JSON token back. Works for every rclone OAuth backend without us
+shipping or leaking our own client secret.
 
 Endpoints:
   GET  /health                              (public)
   POST /upload                             (auth) multipart EPUB -> metadata pipeline -> storage
   GET  /api/books                          (auth)
-  GET/POST/PUT/DELETE /api/storage         (auth) StorageConfig CRUD
+  GET/POST/DELETE /api/storage             (auth) StorageConfig CRUD
   GET/PUT/POST/DELETE /api/metadata        (auth) MetadataConfig CRUD
   POST /sync/syncs                         (auth) KOReader progress push
   GET  /sync/progress/<user>/<doc>         (auth) KOReader progress pull
   POST /api/storage/{id}/mount             (auth) trigger rclone FUSE mount
   POST /api/storage/{id}/unmount           (auth) unmount
+  POST /api/storage/{id}/auth_start        (auth) emit OAuth instructions (manual flow)
+  GET  /api/storage/{id}/auth_status       (auth) poll auth flow state
+  POST /api/storage/{id}/auth_complete     (auth) ingest pasted token, mount
 """
 from __future__ import annotations
 
@@ -35,7 +43,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 import epub_washer
-from database import get_db, init_db
+from database import get_db, init_db, SessionLocal
 from models import Book, MetadataConfig, Progress, StorageConfig, User
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -48,9 +56,8 @@ RCLONE_CONFIG = Path("/root/.config/rclone/rclone.conf")
 RCLONE_LOG_DIR = Path("/var/log/codex-rclone")
 RCLONE_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="CodexServer", version="0.2.0")
+app = FastAPI(title="CodexServer", version="0.3.0")
 
-# CORS - tighten once a real auth + origin policy is decided.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -101,7 +108,6 @@ def _check_basic_auth(auth_header: Optional[str]) -> bool:
 
 
 def require_auth(request: Request) -> None:
-    """Dependency: gate every state-changing or read-API endpoint."""
     if not _check_basic_auth(request.headers.get("authorization")):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -120,6 +126,17 @@ def _slugify(s: str) -> str:
     import re
     s = re.sub(r"[^A-Za-z0-9_-]+", "_", s).strip("_")
     return (s or "remote")[:60]
+
+
+# OAuth-supporting backends in rclone v1.60.
+# Each entry: (config_key_for_token, human_backend_aliases)
+_OAUTH_BACKENDS = {
+    "gdrive":   {"token_key": "token",  "drive_type": "drive"},
+    "onedrive": {"token_key": "token",  "drive_type": "onedrive"},
+    "dropbox":  {"token_key": "token",  "drive_type": "dropbox"},
+    "box":      {"token_key": "token",  "drive_type": "box"},
+    "pcloud":   {"token_key": "token",  "drive_type": "pcloud"},
+}
 
 
 def _rclone_remote_section(cfg: StorageConfig) -> str:
@@ -253,7 +270,6 @@ def _startup() -> None:
     Path(BOOKS_ROOT).mkdir(parents=True, exist_ok=True)
     CLOUD_MOUNT_ROOT.mkdir(parents=True, exist_ok=True)
     _ensure_admin_credentials()
-    from database import SessionLocal
     def _worker():
         with SessionLocal() as db:
             remount_all(db)
@@ -361,6 +377,24 @@ class StorageIn(BaseModel):
 SUPPORTED_BACKENDS = {"local", "gdrive", "onedrive", "dropbox", "webdav", "s3"}
 
 
+def _auth_status_dict(s: StorageConfig) -> dict:
+    """Parse s.auth_status (JSON text) into a dict; default to idle."""
+    if not s.auth_status:
+        return {"state": "idle"}
+    try:
+        return json.loads(s.auth_status)
+    except ValueError:
+        return {"state": "error", "error": "corrupt auth_status JSON"}
+
+
+def _set_auth_status(s: StorageConfig, **fields) -> dict:
+    """Merge new fields into s.auth_status and return the result."""
+    current = _auth_status_dict(s)
+    current.update(fields)
+    s.auth_status = json.dumps(current)
+    return current
+
+
 @app.get("/api/storage", dependencies=[Depends(require_auth)])
 def list_storage(db: Session = Depends(get_db)) -> list[dict]:
     out = []
@@ -371,6 +405,7 @@ def list_storage(db: Session = Depends(get_db)) -> list[dict]:
             "remote_name": s.remote_name, "remote_path": s.remote_path,
             "is_active": s.is_active, "created_at": s.created_at.isoformat(),
             "mounted": mounted,
+            "auth": _auth_status_dict(s),
         })
     return out
 
@@ -422,6 +457,144 @@ def api_mount(sid: int, db: Session = Depends(get_db)) -> dict:
 @app.post("/api/storage/{sid}/unmount", dependencies=[Depends(require_auth)])
 def api_unmount(sid: int) -> dict:
     return unmount_storage(sid)
+
+
+# ========================================================== OAuth flow ===
+
+class AuthCompleteIn(BaseModel):
+    token_blob: str
+    # Optional: how to merge the token blob into rclone.conf.
+    # "auto" (default): if backend is OAuth, merge {token: <blob>} into the [remote_name] section.
+    # "raw":            replace credentials_json verbatim and let rclone.conf inherit it.
+    mode: str = "auto"
+
+
+_OAUTH_INSTRUCTIONS = {
+    "gdrive": (
+        "1. On a machine with rclone installed and a browser, run:\n"
+        "     rclone authorize \"drive\"\n"
+        "2. A browser window opens (or you copy the URL). Sign in to the Google account.\n"
+        "3. rclone prints a single line of JSON that starts with\n"
+        '   {"access_token":... or {"token":"...  — copy that ENTIRE line.\n'
+        "4. Paste it into the field below and click 'Complete connection'.\n"
+        "\n"
+        "The container has no browser; we cannot do step 1 here."
+    ),
+    "onedrive": (
+        "1. On a machine with rclone + browser, run:\n"
+        "     rclone authorize \"onedrive\"\n"
+        "2. Sign in to your Microsoft account, grant the requested scopes.\n"
+        "3. rclone prints a JSON token line — copy the entire line.\n"
+        "4. Paste it below and click 'Complete connection'."
+    ),
+    "dropbox": (
+        "1. On a machine with rclone + browser, run:\n"
+        "     rclone authorize \"dropbox\"\n"
+        "2. Sign in to Dropbox, allow rclone access.\n"
+        "3. rclone prints a JSON token line — copy the entire line.\n"
+        "4. Paste it below and click 'Complete connection'."
+    ),
+    "box": (
+        "1. On a machine with rclone + browser, run:\n"
+        "     rclone authorize \"box\"\n"
+        "2. Sign in to Box, allow rclone access.\n"
+        "3. rclone prints a JSON token line — copy the entire line.\n"
+        "4. Paste it below and click 'Complete connection'."
+    ),
+}
+
+
+@app.post("/api/storage/{sid}/auth_start", dependencies=[Depends(require_auth)])
+def api_auth_start(sid: int, db: Session = Depends(get_db)) -> dict:
+    """Emit OAuth instructions for the given storage config.
+
+    Does NOT start a subprocess — rclone v1.60 has no real Device-Code-Flow.
+    The user must run `rclone authorize <backend>` on a machine with a browser
+    and paste the resulting JSON token into /auth_complete.
+    """
+    s = db.get(StorageConfig, sid)
+    if not s:
+        raise HTTPException(404, "storage config not found")
+    if s.backend == "local":
+        raise HTTPException(400, "local backend needs no auth")
+    if s.backend not in _OAUTH_INSTRUCTIONS:
+        raise HTTPException(400, f"backend {s.backend!r} uses non-OAuth credentials; "
+                                 "fill the credentials_json field directly.")
+
+    instructions = _OAUTH_INSTRUCTIONS[s.backend]
+    _set_auth_status(
+        s, state="pending", backend=s.backend,
+        instructions=instructions, error=None,
+    )
+    db.commit()
+    return {
+        "storage_id": sid,
+        "backend": s.backend,
+        "remote_name": s.remote_name,
+        "state": "pending",
+        "instructions": instructions,
+        "note": ("rclone v1.60 has no true Device-Code-Flow. We surface rclone's own "
+                 "`rclone authorize` instructions and accept the pasted token blob. "
+                 "No client secret is shipped or required."),
+    }
+
+
+@app.get("/api/storage/{sid}/auth_status", dependencies=[Depends(require_auth)])
+def api_auth_status(sid: int, db: Session = Depends(get_db)) -> dict:
+    s = db.get(StorageConfig, sid)
+    if not s:
+        raise HTTPException(404, "storage config not found")
+    return {"storage_id": sid, **_auth_status_dict(s)}
+
+
+@app.post("/api/storage/{sid}/auth_complete", dependencies=[Depends(require_auth)])
+def api_auth_complete(sid: int, payload: AuthCompleteIn, db: Session = Depends(get_db)) -> dict:
+    """Ingest a pasted token blob and mount the storage."""
+    s = db.get(StorageConfig, sid)
+    if not s:
+        raise HTTPException(404, "storage config not found")
+
+    blob = payload.token_blob.strip()
+    if not blob:
+        raise HTTPException(400, "token_blob is empty")
+
+    # Parse to validate it's JSON. rclone authorize prints a JSON object, possibly
+    # wrapped in {"access_token": ...} or {"token": "..."}.
+    try:
+        parsed = json.loads(blob)
+    except ValueError:
+        _set_auth_status(s, state="error", error="pasted blob is not valid JSON")
+        db.commit()
+        raise HTTPException(400, "pasted blob is not valid JSON")
+
+    if not isinstance(parsed, dict):
+        _set_auth_status(s, state="error", error="pasted JSON must be an object")
+        db.commit()
+        raise HTTPException(400, "pasted JSON must be an object (got " + type(parsed).__name__ + ")")
+
+    # Build credentials_json for the rclone.conf section.
+    # rclone's OAuth backends want {"token": "<json-string>"} - i.e. the entire
+    # JSON object gets re-stringified into a single config value.
+    if payload.mode == "raw":
+        creds = parsed
+    else:
+        # Auto-wrap: serialize the entire blob into a single "token" value.
+        creds = {"token": json.dumps(parsed)}
+
+    s.credentials_json = json.dumps(creds)
+    _set_auth_status(s, state="complete", error=None)
+    db.commit()
+
+    # Rebuild rclone.conf + mount.
+    _ensure_rclone_config(db)
+    try:
+        m = mount_storage(s)
+        return {"storage_id": sid, "auth": "complete", "mount": m}
+    except Exception as e:  # noqa: BLE001
+        log.exception("mount after auth_complete failed for storage id=%s", s.id)
+        _set_auth_status(s, state="error", error=f"auth ok but mount failed: {e}")
+        db.commit()
+        raise HTTPException(500, f"auth ok but mount failed: {e}")
 
 
 # ============================================================== metadata ===
