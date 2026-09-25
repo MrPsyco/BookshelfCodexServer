@@ -1,0 +1,6 @@
+library.db
+__pycache__/
+.env
+/books/
+.DS_Store
+*.db-journal

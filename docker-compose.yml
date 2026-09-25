@@ -1,0 +1,16 @@
+services:
+  codexserver:
+    build: .
+    container_name: codexserver
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+      - ./books:/books
+    environment:
+      - BOOKS_ROOT=/books
+    # host networking so the container can reach NAS Ollama without a proxy.
+    # If you prefer bridge networking, drop this and set the Ollama URL to
+    # http://192.168.1.146:11434/api/generate in the Metadata settings UI.
+    network_mode: host

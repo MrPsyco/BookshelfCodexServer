@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CodexServer</title>
+  <link rel="stylesheet" href="/static/dist/tailwind.css" />
+  <style>
+    body { font-feature-settings: "ss01","cv01"; }
+    .cover-shadow { box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 24px -8px rgba(0,0,0,0.6); }
+    .drop-active { outline: 2px dashed rgb(99 102 241); outline-offset: -8px; background: rgba(99,102,241,0.08); }
+    .pulse-dot { animation: pulse 1.6s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity:.4 } 50% { opacity:1 } }
+  </style>
+</head>
+<body class="bg-ink-950 text-slate-100 min-h-full">
+
+  <div id="toasts" class="fixed top-4 right-4 z-50 space-y-2 pointer-events-none"></div>
+
+  <header class="border-b border-slate-800/80 bg-ink-900/70 backdrop-blur sticky top-0 z-30">
+    <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 via-fuchsia-500 to-rose-500 grid place-items-center font-black text-white">C</div>
+        <div>
+          <h1 class="text-base font-semibold leading-none">CodexServer</h1>
+          <p class="text-[11px] text-slate-500 mt-0.5">self-hosted · KOReader-sync · rclone-backed</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 text-sm">
+        <button data-view="library"  class="nav-btn px-3 py-1.5 rounded-md hover:bg-slate-800">Library</button>
+        <button data-view="upload"   class="nav-btn px-3 py-1.5 rounded-md hover:bg-slate-800">Upload</button>
+        <button data-view="settings" class="nav-btn px-3 py-1.5 rounded-md hover:bg-slate-800">Settings</button>
+        <span class="ml-3 flex items-center gap-2 text-xs text-slate-500">
+          <span id="health-dot" class="inline-block w-2 h-2 rounded-full bg-slate-600 pulse-dot"></span>
+          <span id="health-text">connecting…</span>
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-6 py-8">
+
+    <section id="view-library" class="view">
+      <div class="flex items-baseline justify-between mb-5">
+        <h2 class="text-lg font-semibold tracking-tight">Library <span id="lib-count" class="text-slate-500 font-normal text-sm ml-2"></span></h2>
+        <button onclick="loadLibrary()" class="text-xs text-slate-400 hover:text-slate-200">refresh</button>
+      </div>
+      <div id="library-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4"></div>
+      <div id="library-empty" class="hidden text-center py-24 text-slate-500">
+        <p class="text-lg">No books yet.</p>
+        <p class="text-sm mt-1">Drop an <code>.epub</code> on the Upload tab to get started.</p>
+      </div>
+    </section>
+
+    <section id="view-upload" class="view hidden">
+      <h2 class="text-lg font-semibold tracking-tight mb-5">Upload EPUB</h2>
+      <div id="dropzone" class="rounded-2xl border-2 border-dashed border-slate-700 bg-ink-900/40 p-12 text-center transition">
+        <p class="mt-2 text-slate-300">Drop one or more <code>.epub</code> files here</p>
+        <p class="text-xs text-slate-500 mt-1">or</p>
+        <label class="mt-2 inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-md text-sm font-medium cursor-pointer">
+          <input type="file" id="file-input" accept=".epub" multiple class="hidden" />
+          Choose files
+        </label>
+      </div>
+      <div id="upload-list" class="mt-6 space-y-2"></div>
+    </section>
+
+    <section id="view-settings" class="view hidden">
+      <h2 class="text-lg font-semibold tracking-tight mb-5">Settings</h2>
+      <div class="grid lg:grid-cols-2 gap-6">
+        <div class="rounded-xl border border-slate-800 bg-ink-900/40 p-5">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-medium">Metadata Providers</h3>
+            <button id="add-meta-btn" class="text-xs text-indigo-400 hover:text-indigo-300">+ add</button>
+          </div>
+          <p class="text-xs text-slate-500 mb-3">Lower priority runs first. Chain stops as soon as title and author are filled.</p>
+          <div id="metadata-list" class="space-y-2"></div>
+        </div>
+        <div class="rounded-xl border border-slate-800 bg-ink-900/40 p-5">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-medium">Storage Backends</h3>
+          </div>
+          <p class="text-xs text-amber-400/80 mb-3">
+            Cloud backends currently store credentials only. The actual <code>rclone</code> remote is Phase 2.
+            Local backend works end-to-end.
+          </p>
+          <form id="storage-form" class="space-y-2">
+            <input name="label" required placeholder="Label (e.g. My NAS)"
+                   class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+            <select name="backend" class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm">
+              <option value="local">Lokales NAS</option>
+              <option value="gdrive">Google Drive</option>
+              <option value="onedrive">OneDrive</option>
+              <option value="dropbox">Dropbox</option>
+              <option value="webdav">Nextcloud / WebDAV</option>
+              <option value="s3">S3</option>
+            </select>
+            <div class="grid grid-cols-2 gap-2">
+              <input name="remote_name" placeholder="rclone remote name"
+                     class="bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+              <input name="remote_path" placeholder="/Books"
+                     class="bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+            </div>
+            <textarea name="credentials_json" rows="2" placeholder="credentials (token / JSON / config-blob)"
+                      class="w-full bg-ink-950 border border-slate-800 rounded px-2 py-1.5 text-xs font-mono"></textarea>
+            <button class="bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 rounded text-sm font-medium">Save</button>
+          </form>
+          <div id="storage-list" class="mt-4 space-y-1 text-sm"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+  const $  = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+  const esc = s => (s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function toast(msg, kind='info') {
+    const colors = {info:'bg-slate-800 border-slate-700', success:'bg-emerald-900/80 border-emerald-700',
+                    error:'bg-rose-900/80 border-rose-700', warning:'bg-amber-900/80 border-amber-700'};
+    const el = document.createElement('div');
+    el.className = `pointer-events-auto rounded-lg border ${colors[kind]} px-4 py-2 text-sm shadow-lg max-w-sm`;
+    el.textContent = msg;
+    $('#toasts').appendChild(el);
+    setTimeout(() => { el.style.transition='opacity .3s'; el.style.opacity='0'; setTimeout(()=>el.remove(), 300); }, 4000);
+  }
+
+  function showView(name) {
+    $$('.view').forEach(v => v.classList.add('hidden'));
+    $('#view-' + name).classList.remove('hidden');
+    $$('.nav-btn').forEach(b => b.classList.remove('bg-slate-800'));
+    const btn = $$('.nav-btn').find(b => b.dataset.view === name);
+    if (btn) btn.classList.add('bg-slate-800');
+    if (name === 'library')  loadLibrary();
+    if (name === 'settings') { loadMetadata(); loadStorage(); }
+  }
+  $$('.nav-btn').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
+
+  async function pollHealth() {
+    try {
+      const j = await (await fetch('/health')).json();
+      $('#health-dot').className = 'inline-block w-2 h-2 rounded-full bg-emerald-500 pulse-dot';
+      $('#health-text').textContent = 'online · ' + j.books_root;
+    } catch {
+      $('#health-dot').className = 'inline-block w-2 h-2 rounded-full bg-rose-500 pulse-dot';
+      $('#health-text').textContent = 'offline';
+    }
+  }
+  pollHealth(); setInterval(pollHealth, 8000);
+
+  function coverSvg(title, author) {
+    let h = 0; for (const c of (title||'?')) h = (h*31 + c.charCodeAt(0)) & 0xffff;
+    const hue1 = h % 360, hue2 = (hue1 + 60) % 360;
+    const initials = (title||'?').split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase();
+    return `<svg viewBox="0 0 200 280" xmlns="http://www.w3.org/2000/svg" class="w-full h-full">
+      <defs><linearGradient id="g${h}" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="hsl(${hue1},65%,45%)"/>
+        <stop offset="100%" stop-color="hsl(${hue2},70%,30%)"/>
+      </linearGradient></defs>
+      <rect width="200" height="280" fill="url(#g${h})"/>
+      <rect width="200" height="280" fill="rgba(0,0,0,0.18)"/>
+      <text x="100" y="135" text-anchor="middle" font-family="ui-serif,Georgia,serif"
+            font-size="86" font-weight="700" fill="rgba(255,255,255,0.92)">${esc(initials)}</text>
+      <text x="100" y="200" text-anchor="middle" font-family="ui-sans-serif,system-ui"
+            font-size="11" fill="rgba(255,255,255,0.85)">${esc((title||'').slice(0,40))}</text>
+      <text x="100" y="220" text-anchor="middle" font-family="ui-sans-serif,system-ui"
+            font-size="9" fill="rgba(255,255,255,0.65)">${esc((author||'').slice(0,40))}</text>
+    </svg>`;
+  }
+
+  async function loadLibrary() {
+    const books = await (await fetch('/api/books')).json();
+    const grid = $('#library-grid'), empty = $('#library-empty');
+    $('#lib-count').textContent = books.length ? '(' + books.length + ')' : '';
+    if (books.length === 0) { grid.innerHTML=''; empty.classList.remove('hidden'); return; }
+    empty.classList.add('hidden');
+    grid.innerHTML = books.map(b => `
+      <article class="rounded-xl overflow-hidden cover-shadow bg-ink-900/40 border border-slate-800/60 hover:border-slate-700 transition">
+        <div class="aspect-[5/7] bg-slate-800">${coverSvg(b.title, b.author)}</div>
+        <div class="p-3">
+          <div class="text-sm font-medium leading-snug line-clamp-2">${esc(b.title)}</div>
+          <div class="text-xs text-slate-400 mt-1 line-clamp-1">${esc(b.author || '—')}</div>
+          <div class="text-[10px] text-slate-600 mt-2 truncate" title="${esc(b.storage_path)}">${esc(b.storage_backend)}</div>
+        </div>
+      </article>`).join('');
+  }
+
+  const dropzone = $('#dropzone');
+  ;['dragenter','dragover'].forEach(ev =>
+    dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.add('drop-active'); }));
+  ;['dragleave','drop'].forEach(ev =>
+    dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.remove('drop-active'); }));
+  dropzone.addEventListener('drop', e => uploadFiles(e.dataTransfer.files));
+  $('#file-input').addEventListener('change', e => uploadFiles(e.target.files));
+
+  async function uploadFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    for (const f of files) {
+      if (!f.name.toLowerCase().endsWith('.epub')) {
+        toast('Skipped ' + f.name + ' (not .epub)', 'warning'); continue;
+      }
+      const row = document.createElement('div');
+      row.className = 'rounded-lg border border-slate-800 bg-ink-900/40 p-3';
+      row.innerHTML = `
+        <div class="flex items-center justify-between text-sm">
+          <span class="truncate">${esc(f.name)}</span>
+          <span class="status text-xs text-slate-400">queued</span>
+        </div>
+        <div class="mt-2 h-1.5 rounded bg-slate-800 overflow-hidden">
+          <div class="bar h-full bg-indigo-500 transition-all" style="width:0%"></div>
+        </div>`;
+      $('#upload-list').prepend(row);
+      const status = row.querySelector('.status'), bar = row.querySelector('.bar');
+      try {
+        status.textContent = 'uploading…'; bar.style.width = '5%';
+        const fd = new FormData(); fd.append('file', f); fd.append('backend', 'local');
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/upload');
+        xhr.upload.onprogress = (e) => { if (e.lengthComputable) bar.style.width = Math.max(5, Math.round(e.loaded/e.total*95)) + '%'; };
+        const j = await new Promise((resolve, reject) => {
+          xhr.onload = () => xhr.status >= 200 && xhr.status < 300
+            ? resolve(JSON.parse(xhr.responseText))
+            : reject(new Error('HTTP ' + xhr.status + ': ' + xhr.responseText));
+          xhr.onerror = () => reject(new Error('network error'));
+          xhr.send(fd);
+        });
+        bar.style.width = '100%'; status.textContent = 'done'; status.className = 'status text-xs text-emerald-400';
+        toast('Saved "' + j.title + '" by ' + j.author, 'success');
+        loadLibrary();
+      } catch (e) {
+        bar.classList.remove('bg-indigo-500'); bar.classList.add('bg-rose-500');
+        status.textContent = 'failed'; status.className = 'status text-xs text-rose-400';
+        toast('Upload failed: ' + e.message, 'error');
+      }
+    }
+  }
+
+  async function loadMetadata() {
+    const list = await (await fetch('/api/metadata')).json();
+    $('#metadata-list').innerHTML = list.map(m => `
+      <div class="flex items-center gap-2 rounded-md border border-slate-800 bg-ink-950/60 px-2.5 py-1.5" data-id="${m.id}">
+        <input type="checkbox" ${m.is_active?'checked':''} class="meta-active accent-indigo-500">
+        <span class="flex-1 text-sm">${esc(m.provider_name)}</span>
+        <input type="text" value="${esc(m.api_key_or_url||'')}" placeholder="key/url"
+               class="meta-url w-44 bg-ink-950 border border-slate-800 rounded px-2 py-0.5 text-xs font-mono">
+        <input type="number" value="${m.priority}" class="meta-prio w-14 bg-ink-950 border border-slate-800 rounded px-2 py-0.5 text-xs">
+        <button class="meta-save text-xs text-indigo-400 hover:text-indigo-300 px-1">save</button>
+        <button class="meta-del text-xs text-rose-400 hover:text-rose-300 px-1">x</button>
+      </div>`).join('') || '<p class="text-xs text-slate-500">No providers.</p>';
+    $$('.meta-save').forEach(b => b.addEventListener('click', () => saveMeta(b.closest('[data-id]'))));
+    $$('.meta-del').forEach(b => b.addEventListener('click', () => delMeta(b.closest('[data-id]'))));
+  }
+  async function saveMeta(row) {
+    const body = {
+      provider_name: row.querySelector('span').textContent.trim(),
+      is_active: row.querySelector('.meta-active').checked,
+      priority: parseInt(row.querySelector('.meta-prio').value) || 100,
+      api_key_or_url: row.querySelector('.meta-url').value,
+    };
+    const r = await fetch('/api/metadata/' + row.dataset.id, {
+      method:'PUT', headers:{'content-type':'application/json'}, body: JSON.stringify(body)
+    });
+    toast(r.ok ? 'Provider updated' : 'Update failed', r.ok ? 'success' : 'error');
+  }
+  async function delMeta(row) {
+    await fetch('/api/metadata/' + row.dataset.id, { method:'DELETE' });
+    loadMetadata();
+  }
+  $('#add-meta-btn').addEventListener('click', async () => {
+    const name = prompt('Provider name (internal_opf | google_books | ollama | openai):');
+    if (!name) return;
+    const r = await fetch('/api/metadata', {
+      method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({ provider_name: name.trim(), is_active: true, priority: 50, api_key_or_url: '' })
+    });
+    if (!r.ok) { toast('Unknown provider', 'error'); return; }
+    loadMetadata();
+  });
+
+  async function loadStorage() {
+    const list = await (await fetch('/api/storage')).json();
+    $('#storage-list').innerHTML = list.map(s => `
+      <div class="flex justify-between items-center rounded-md border border-slate-800 bg-ink-950/60 px-3 py-2">
+        <div class="text-sm">
+          <span class="font-medium">${esc(s.label)}</span>
+          <span class="text-slate-500"> · ${esc(s.backend)}</span>
+          ${s.remote_name ? '<span class="text-slate-500"> · ' + esc(s.remote_name) + ':' + esc(s.remote_path||'') + '</span>' : ''}
+        </div>
+        <button data-id="${s.id}" class="text-rose-400 text-xs hover:text-rose-300">delete</button>
+      </div>`).join('') || '<p class="text-xs text-slate-500">No storage configured.</p>';
+    $$('#storage-list button[data-id]').forEach(b =>
+      b.addEventListener('click', async () => { await fetch('/api/storage/'+b.dataset.id,{method:'DELETE'}); loadStorage(); }));
+  }
+  $('#storage-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const body = Object.fromEntries(new FormData(e.target).entries());
+    body.is_active = true;
+    if (!body.remote_name) body.remote_name = null;
+    if (!body.remote_path) body.remote_path = null;
+    if (!body.credentials_json) body.credentials_json = null;
+    const r = await fetch('/api/storage', {
+      method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    if (r.ok) toast('Storage saved' + (j.stub ? ' (stub — rclone phase 2)' : ''), j.stub ? 'warning' : 'success');
+    else toast('Save failed', 'error');
+    e.target.reset(); loadStorage();
+  });
+
+  showView('library');
+  </script>
+</body>
+</html>
