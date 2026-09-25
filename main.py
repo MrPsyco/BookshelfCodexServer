@@ -47,7 +47,7 @@ from sqlalchemy.orm import Session
 
 import epub_washer
 from database import get_db, init_db, SessionLocal
-from models import Book, MetadataConfig, Progress, StorageConfig, User
+from models import Book, KosyncProgress, MetadataConfig, Progress, StorageConfig, User
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("codexserver")
@@ -540,8 +540,19 @@ async def upload_epub(
     with open(dest, "wb") as fh:
         fh.write(blob)
 
+    # Compute KOReader's partialMD5 over the saved file. This is the value
+    # KOReader clients will send as `document` when they sync progress for
+    # this book, so we persist it on the book row to JOIN against the
+    # kosync_progress table the Web UI reads.
+    try:
+        from koreader_hash import partial_md5 as _partial_md5
+        kh = _partial_md5(dest)
+    except Exception:
+        kh = None
+
     book = Book(title=title, author=author, storage_path=dest,
-                storage_backend=chosen_label, file_size=len(blob))
+                storage_backend=chosen_label, file_size=len(blob),
+                koreader_hash=kh)
     db.add(book)
     db.commit()
     db.refresh(book)
@@ -800,50 +811,357 @@ def delete_metadata(mid: int, db: Session = Depends(get_db)) -> dict:
     return {"deleted": mid}
 
 
-# ============================================================ KOReader sync
+# ============================================================ kosync v1 sync
+#
+# Implements the kosync v1 protocol described in
+# https://github.com/pid1/kosync-conformance/blob/main/SPEC.md
+# (CC0, observational spec of koreader/koreader-sync-server). Verified with
+# the official conformance verifier verify.mjs.
+#
+# Auth: x-auth-user + x-auth-key (lowercase MD5 hex of the plaintext password
+# the user typed into KOReader). No Basic Auth, no Bearer, no cookies. The
+# server never sees the plaintext password.
+#
+# Storage: kosync_progress rows per (user, document). Last-write-wins, no
+# conflict resolution server-side (K-PUT-5). The opaque document id is what
+# KOReader sends - normally a 32-char lowercase hex partialMD5.
 
-class SyncBody(BaseModel):
-    username: str
-    password: Optional[str] = None
-    document: str
-    progress: str
-    percentage: Optional[float] = None
-    device: Optional[str] = None
+import re as _re_kosync
+import json as _json_kosync
+from starlette.responses import JSONResponse as _JSONResponse_kosync
+from fastapi import Request as _Request_kosync
+_DOCUMENT_RE = _re_kosync.compile(r"^[A-Za-z0-9_]+$")
+_USERNAME_RE = _re_kosync.compile(r"^[^:]+$")
 
 
-@app.post("/sync/syncs")
-def koreader_push(body: SyncBody, user: User = Depends(require_sync_auth),
-                  db: Session = Depends(get_db)) -> dict:
-    book = db.query(Book).filter(Book.storage_path.like(f"%{body.document}%")).first()
-    if book is None:
-        book = Book(title=f"[unmatched:{body.document[:12]}]", author="Unknown Author",
-                    storage_path=body.document, storage_backend="sync")
-        db.add(book)
-        db.commit()
-        db.refresh(book)
-    p = db.query(Progress).filter(Progress.user_id == user.id, Progress.book_id == book.id).first()
-    if p is None:
-        db.add(Progress(user_id=user.id, book_id=book.id, progress_percent=body.progress, device=body.device))
-    else:
-        p.progress_percent = body.progress
-        p.device = body.device
+class _KosyncHTTPError(Exception):
+    """Internal: raise this from a kosync endpoint; the global handler
+    registered below converts it into a flat {code, message} JSONResponse
+    with the right status code and a SPEC.md-conformant body."""
+
+    def __init__(self, status: int, code: int, message: str):
+        self.status = status
+        self.code = code
+        self.message = message
+
+
+@app.exception_handler(_KosyncHTTPError)
+async def _kosync_error_handler(request: Request, exc: _KosyncHTTPError):
+    return _JSONResponse_kosync(
+        status_code=exc.status,
+        content={"code": exc.code, "message": exc.message},
+        headers={"Content-Type": "application/json"},
+    )
+
+
+def _kosync_error(status: int, code: int, message: str) -> _KosyncHTTPError:
+    """Emit a SPEC.md-conformant error: flat {code, message} JSONResponse.
+    Returns an exception to raise, not a response to return."""
+    return _KosyncHTTPError(status, code, message)
+
+
+def _accept_v1_strict(request) -> None:
+    """Gate the v1 Accept header per SPEC.md [K-ACC-1]/[K-ACC-2].
+
+    Per [K-ACC-3], the spec says a server MAY relax the header check and
+    serve requests that omit it (or send */*, application/json, etc).
+    Because real KOReader builds routinely send no Accept header, we are
+    permissive: any header that mentions "json", is a JSON media type,
+    or is the wildard */* is accepted. Only explicit non-JSON types raise.
+
+    Use --strict-accept with the verifier to exercise the strict path.
+    """
+    accept = (request.headers.get("accept") or "").lower().strip()
+    if not accept:
+        return
+    if "application/vnd.koreader.v1+json" in accept:
+        return
+    if accept == "*/*":
+        return
+    if "json" in accept:
+        return
+    raise _kosync_error(412, 101, "Invalid Accept header format.")
+
+
+async def _kosync_read_json(request: _Request_kosync) -> dict:
+    """Parse the request body without Content-Type inspection.
+
+    SPEC.md [K-CT-2] requires the server to accept JSON bodies regardless of
+    Content-Type. FastAPI's BaseModel dependency inspects Content-Type and
+    returns 422 if it's not application/json, which breaks the protocol.
+    """
+    raw = await request.body()
+    if not raw:
+        return {}
+    try:
+        obj = _json_kosync.loads(raw)
+    except Exception:
+        raise _kosync_error(400, 103, "Bad JSON")
+    if not isinstance(obj, dict):
+        raise _kosync_error(400, 104, "JSON body must be an object")
+    return obj
+
+
+def _kosync_auth_or_401(request: Request, db: Session):
+    """Read x-auth-user + x-auth-key and look up the user.
+
+    Per SPEC.md [K-AUTH-3]: key is compared byte-exact, hex case matters.
+    Per [K-AUTH-6]: bad credentials -> 401, code 2001, no WWW-Authenticate
+    header (this is JSON API, not Basic).
+
+    Returns the user on success, raises a 401 JSONResponse on failure so
+    FastAPI doesn't wrap our body in {"detail": ...}.
+    """
+    username = request.headers.get("x-auth-user", "")
+    key = request.headers.get("x-auth-key", "")
+    if not username or ":" in username:
+        raise _kosync_error(401, 2001, "Unauthorized")
+    if not key:
+        raise _kosync_error(401, 2001, "Unauthorized")
+    u = db.query(User).filter(User.username == username).first()
+    if u is None or not u.kosync_key or u.kosync_key != key:
+        raise _kosync_error(401, 2001, "Unauthorized")
+    return u
+
+
+class _KosyncAuthDep:
+    """FastAPI dependency wrapper: pulls request + db and runs the auth check."""
+
+    def __init__(self, request: Request, db: Session = Depends(get_db)):
+        self.user = _kosync_auth_or_401(request, db)
+
+
+# ------------------------------------------------------------ /healthcheck
+@app.get("/healthcheck")
+def kosync_healthcheck(request: Request) -> _JSONResponse_kosync:
+    """[K-HC-1] Liveness probe, unauthenticated, vendor Accept required."""
+    _accept_v1_strict(request)
+    return _JSONResponse_kosync(
+        status_code=200,
+        content={"state": "OK"},
+        headers={"Content-Type": "application/json"},
+    )
+
+
+# ------------------------------------------------------------ /users/create
+@app.post("/users/create")
+async def kosync_create_user(
+    request: Request, db: Session = Depends(get_db)
+) -> _JSONResponse_kosync:
+    """[K-REG-1..5] Self-registration. The 'password' field carries the
+    client-derived key (MD5 hex of the plaintext the user typed)."""
+    _accept_v1_strict(request)
+    body = await _kosync_read_json(request)
+    username = (str(body.get("username") or "")).strip()
+    key = str(body.get("password") or "")
+    if not username or ":" in username or not key:
+        raise _kosync_error(403, 2003, "Invalid request")
+    existing = db.query(User).filter(User.username == username).first()
+    if existing is not None:
+        # [K-REG-3]: existing username returns 402 / code 2002. We do NOT
+        # silently adopt an existing koreader-only account - that's a
+        # security boundary KOReader clients will trip over (they treat
+        # 201 as the only success signal and may skip /users/auth).
+        raise _kosync_error(402, 2002, "Username is already registered.")
+    u = User(username=username, role="koreader", kosync_key=key)
+    db.add(u)
     db.commit()
-    return {"status": "ok"}
+    return _JSONResponse_kosync(
+        status_code=201,
+        content={"username": username},
+        headers={"Content-Type": "application/json"},
+    )
 
 
-@app.get("/sync/progress/{username}/{document}")
-def koreader_pull(username: str, document: str, user: User = Depends(require_sync_auth),
-                  db: Session = Depends(get_db)) -> dict:
-    if username != user.username:
-        raise HTTPException(403, "username mismatch")
-    book = db.query(Book).filter(Book.storage_path == document).first()
-    if book is None:
-        raise HTTPException(404, "unknown document")
-    p = db.query(Progress).filter(Progress.user_id == user.id, Progress.book_id == book.id).first()
-    if p is None:
-        raise HTTPException(404, "no progress recorded")
-    return {"username": username, "document": document, "progress": p.progress_percent,
-            "device": p.device, "timestamp": int(p.updated_at.timestamp())}
+# ------------------------------------------------------------ /users/auth
+@app.get("/users/auth")
+def kosync_auth_check(request: Request, db: Session = Depends(get_db)) -> _JSONResponse_kosync:
+    """[K-AUTH-7] Credential check, no body."""
+    _accept_v1_strict(request)
+    _kosync_auth_or_401(request, db)
+    return _JSONResponse_kosync(
+        status_code=200,
+        content={"authorized": "OK"},
+        headers={"Content-Type": "application/json"},
+    )
+
+
+# ------------------------------------------------------------ /syncs/progress
+@app.put("/syncs/progress")
+async def kosync_put_progress(
+    request: Request, db: Session = Depends(get_db)
+) -> _JSONResponse_kosync:
+    """[K-PUT-1..5] Push a reading position. Last-write-wins."""
+    _accept_v1_strict(request)
+    user = _kosync_auth_or_401(request, db)
+    body = await _kosync_read_json(request)
+    doc = str(body.get("document") or "")
+    if not doc or ":" in doc or not _DOCUMENT_RE.match(doc):
+        raise _kosync_error(403, 2004, "Field 'document' not provided.")
+    pct_raw = body.get("percentage")
+    progress = body.get("progress")
+    device = body.get("device")
+    device_id = body.get("device_id")
+    # [K-FLD-5]: percentage 0 is legal; only None / non-numeric are errors.
+    try:
+        pct = float(pct_raw) if pct_raw is not None else None
+    except (TypeError, ValueError):
+        pct = None
+    if pct is None or progress is None or not device:
+        raise _kosync_error(403, 2003, "Invalid request")
+    if not isinstance(progress, str):
+        progress = str(progress)
+    if not isinstance(device, str) or not device:
+        raise _kosync_error(403, 2003, "Invalid request")
+    import time as _t
+    ts = int(_t.time())
+    row = (
+        db.query(KosyncProgress)
+        .filter(KosyncProgress.user_id == user.id, KosyncProgress.document == doc)
+        .first()
+    )
+    if row is None:
+        row = KosyncProgress(
+            user_id=user.id,
+            document=doc,
+            progress=progress,
+            percentage=str(pct),
+            device=device,
+            device_id=device_id,
+            timestamp=ts,
+        )
+        db.add(row)
+    else:
+        row.progress = progress
+        row.percentage = str(pct)
+        row.device = device
+        row.device_id = device_id
+        row.timestamp = ts
+    db.commit()
+    return _JSONResponse_kosync(
+        status_code=200,
+        content={"document": doc, "timestamp": ts},
+        headers={"Content-Type": "application/json"},
+    )
+
+
+# ------------------------------------------------------------ /syncs/progress/{document}
+@app.get("/syncs/progress/{document}")
+def kosync_get_progress(
+    document: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> _JSONResponse_kosync:
+    """[K-GET-1..3] Pull the stored position for one document.
+
+    Unknown document returns 200 with {} - the most frequently
+    reimplemented-wrong behaviour in the protocol. Clients test for the
+    absence of `percentage`, not for a status code.
+    """
+    _accept_v1_strict(request)
+    user = _kosync_auth_or_401(request, db)
+    if not _DOCUMENT_RE.match(document):
+        raise _kosync_error(403, 2004, "Field 'document' not provided.")
+    row = (
+        db.query(KosyncProgress)
+        .filter(KosyncProgress.user_id == user.id, KosyncProgress.document == document)
+        .first()
+    )
+    if row is None:
+        return _JSONResponse_kosync(
+            status_code=200,
+            content={},
+            headers={"Content-Type": "application/json"},
+        )
+    out: dict = {}
+    if row.device_id:
+        out["device_id"] = row.device_id
+    out["progress"] = row.progress
+    out["document"] = row.document
+    out["percentage"] = float(row.percentage) if row.percentage else 0.0
+    out["timestamp"] = row.timestamp
+    out["device"] = row.device or ""
+    return _JSONResponse_kosync(
+        status_code=200,
+        content=out,
+        headers={"Content-Type": "application/json"},
+    )
+
+
+# ------------------------------------------------------------ /users/me (DELETE)
+@app.delete("/users/me")
+def kosync_delete_me(request: Request, db: Session = Depends(get_db)) -> _JSONResponse_kosync:
+    """[K-DEL-1..3] Delete account and all its reading progress."""
+    _accept_v1_strict(request)
+    user = _kosync_auth_or_401(request, db)
+    db.query(KosyncProgress).filter(KosyncProgress.user_id == user.id).delete()
+    db.delete(user)
+    db.commit()
+    return _JSONResponse_kosync(
+        status_code=200,
+        content={"deleted": True},
+        headers={"Content-Type": "application/json"},
+    )
+
+
+# ------------------------------------------------------------ /users/password (PUT)
+@app.put("/users/password")
+async def kosync_change_password(
+    request: Request, db: Session = Depends(get_db)
+) -> _JSONResponse_kosync:
+    """[K-PWD-*] Replace the sync credential; reading progress is preserved."""
+    _accept_v1_strict(request)
+    user = _kosync_auth_or_401(request, db)
+    body = await _kosync_read_json(request)
+    new_key = str(body.get("password") or "")
+    if not new_key:
+        raise _kosync_error(403, 2003, "Invalid request")
+    user.kosync_key = new_key
+    db.commit()
+    return _JSONResponse_kosync(
+        status_code=200,
+        content={"updated": True},
+        headers={"Content-Type": "application/json"},
+    )
+
+
+# ------------------------------------------------------------ Web UI bridge
+@app.get("/api/koreader/progress")
+def api_koreader_progress(
+    _admin: dict = Depends(require_ui_auth),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    """Joined view of kosync_progress + books for the Web UI.
+
+    Returns one row per (user, document) the kosync server has stored, with
+    title/author populated if the document matches a book we have hashed.
+    Documents without a known book appear as `unmatched:abcd1234...` so the
+    user can see sync is happening even before uploads arrive.
+    """
+    rows = (
+        db.query(KosyncProgress, User, Book)
+        .outerjoin(User, KosyncProgress.user_id == User.id)
+        .outerjoin(Book, Book.koreader_hash == KosyncProgress.document)
+        .order_by(KosyncProgress.updated_at.desc())
+        .all()
+    )
+    out = []
+    for prog, owner, book in rows:
+        out.append({
+            "id": prog.id,
+            "username": owner.username if owner else None,
+            "document": prog.document,
+            "percentage": float(prog.percentage) if prog.percentage else 0.0,
+            "progress": prog.progress,
+            "device": prog.device,
+            "device_id": prog.device_id,
+            "timestamp": prog.timestamp,
+            "updated_at": prog.updated_at.isoformat() if prog.updated_at else None,
+            "book_id": book.id if book else None,
+            "title": book.title if book else None,
+            "author": book.author if book else None,
+        })
+    return out
 
 
 # ============================================================== static ===

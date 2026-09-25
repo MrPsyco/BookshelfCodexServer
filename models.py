@@ -14,6 +14,11 @@ class User(Base):
     role = Column(String(20), nullable=False, default="koreader")
     # bcrypt hash; NULL for legacy KOReader rows that have no password
     password_hash = Column(String(255), nullable=True)
+    # KOReader sync credential: client-side MD5(lowercase hex) of the
+    # password the user typed into KOReader's sync settings. Compared
+    # byte-exact against the x-auth-key header (kosync v1 protocol).
+    # NULL until the user registers via POST /users/create.
+    kosync_key = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_login_at = Column(DateTime, nullable=True)
 
@@ -30,6 +35,10 @@ class Book(Base):
     storage_backend = Column(String(50), nullable=False, default="local")  # local | gdrive | onedrive | ...
     file_size = Column(Integer, nullable=True)
     added_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # KOReader document hash (32-char lowercase hex, MD5 over 12 sampled
+    # 1024-byte blocks at the partialMD5 offsets). NULL until a real file is
+    # attached and hashed. Used to JOIN kosync_progress rows to books.
+    koreader_hash = Column(String(32), nullable=True, index=True)
 
 
 class Progress(Base):
@@ -46,6 +55,32 @@ class Progress(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="progress")
+
+
+class KosyncProgress(Base):
+    """Real kosync v1 progress store: per-user, per-opaque-document.
+
+    The `document` field is an opaque string supplied by the KOReader client.
+    KOReader always sends a 32-character lowercase hex partialMD5, which
+    matches our [A-Za-z0-9_]+ route pattern and the books.koreader_hash column
+    we populate when uploading files. When a row is written, we also try to
+    JOIN books on koreader_hash and expose the link in /api/koreader/progress
+    so the Web UI can show the book title alongside the device percentage.
+    """
+
+    __tablename__ = "kosync_progress"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    document = Column(String(64), nullable=False, index=True)  # KOReader's 32-hex digest
+    progress = Column(String(2048), nullable=False, default="")  # XPointer string
+    percentage = Column(String(20), nullable=False, default="0")  # stored as text to preserve float repr
+    device = Column(String(120), nullable=True)
+    device_id = Column(String(120), nullable=True)
+    timestamp = Column(Integer, nullable=False, default=0)  # server-set epoch seconds
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    user = relationship("User")
 
 
 class StorageConfig(Base):

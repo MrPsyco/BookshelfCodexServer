@@ -45,6 +45,19 @@ def _ensure_columns() -> None:
                 conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)"))
             if "last_login_at" not in cols:
                 conn.execute(text("ALTER TABLE users ADD COLUMN last_login_at DATETIME"))
+            if "kosync_key" not in cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN kosync_key VARCHAR(64)"))
+    if insp.has_table("books"):
+        cols = {c["name"] for c in insp.get_columns("books")}
+        with engine.begin() as conn:
+            if "koreader_hash" not in cols:
+                conn.execute(text("ALTER TABLE books ADD COLUMN koreader_hash VARCHAR(32)"))
+        # index is best-effort; duplicate index will raise, we ignore.
+        with engine.begin() as conn:
+            try:
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_books_koreader_hash ON books(koreader_hash)"))
+            except Exception:
+                pass
 
 
 def init_db() -> None:
