@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Depends, File, UploadFile, HTTPException, Form, Request, status
-from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
@@ -929,6 +929,309 @@ class _KosyncAuthDep:
 
     def __init__(self, request: Request, db: Session = Depends(get_db)):
         self.user = _kosync_auth_or_401(request, db)
+
+
+# ============================================================ OPDS CATALOG =
+#
+# Minimal OPDS 1.2 Acquisition Feed for KOReader's built-in OPDS catalog
+# plugin. Same HTTP-Basic-Auth scheme as /sync/* (the KOReader user).
+# Storage is read-only: books come from books.storage_path, which works for
+# both local /books/ and FUSE-mounted /mnt/cloud/<backend>_<name>/.
+#
+# Spec: https://specs.opds.io/opds-1.2 (Atom + OPDS namespaces).
+#
+import html as _html_mod
+import xml.etree.ElementTree as _ET
+from email.utils import format_datetime as _rfc3339
+from datetime import timezone as _tz
+
+_OPDS_ATOM = "http://www.w3.org/2005/Atom"
+_OPDS_NS   = "http://opds-spec.org/2010/catalog"
+_OPDS_DC   = "http://purl.org/dc/terms/"
+
+# ElementTree emits a default-namespace xmlns="" declaration for the empty
+# prefix when an Element is constructed via QName(). Register opds/dcterms
+# so SubElement calls use the proper prefix automatically. Do NOT also call
+# root.set('xmlns:opds', ...) - that creates duplicate xmlns attributes,
+# which KOReader's OPDS parser rejects.
+_ET.register_namespace("",        _OPDS_ATOM)
+_ET.register_namespace("opds",    _OPDS_NS)
+_ET.register_namespace("dcterms", _OPDS_DC)
+
+
+def _opds_xml(tree: _ET.ElementTree) -> bytes:
+    """Render an ElementTree with the OPDS XML declaration + UTF-8."""
+    body = _ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=False)
+    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + body
+
+
+def _xml_text(tag: str, text: str, **attrs) -> _ET.Element:
+    el = _ET.Element(tag)
+    el.text = text
+    for k, v in attrs.items():
+        el.set(k.replace("__", ":"), str(v))
+    return el
+
+
+def _xml_link(href: str, rel: str, type_: str, **extra) -> _ET.Element:
+    attrs = {"href": href, "rel": rel, "type": type_}
+    attrs.update(extra)
+    return _ET.Element("link", attrs)
+
+
+def _esc(s: object) -> str:
+    return _html_mod.escape(str(s) if s is not None else "", quote=True)
+
+
+def _opds_iso(dt) -> str:
+    if dt is None:
+        dt = __import__("datetime").datetime.utcnow()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_tz.utc)
+    return _rfc3339(dt.astimezone(_tz.utc))
+
+
+def _require_opds_auth(request: Request, db: Session = Depends(get_db)) -> User:
+    """HTTP Basic for /opds/*. Same UX as the KOReader sync dialog, so the
+    user types one pair of credentials that works for both.
+
+    Active users of any role can browse. (Read-only access; downloads are
+    mediated by FileResponse which checks the path on every request.)
+    """
+    import base64 as _b64
+
+    header = request.headers.get("authorization", "")
+    if not header.lower().startswith("basic "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Basic auth required",
+            headers={"WWW-Authenticate": 'Basic realm="codexserver-opds"'},
+        )
+    try:
+        raw = _b64.b64decode(header.split(None, 1)[1]).decode("utf-8")
+        username, _, password = raw.partition(":")
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Malformed Basic header",
+            headers={"WWW-Authenticate": 'Basic realm="codexserver-opds"'},
+        )
+
+    user = db.query(User).filter(User.username == username).first()
+    if user is None or not verify_password(password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid OPDS credentials",
+            headers={"WWW-Authenticate": 'Basic realm="codexserver-opds"'},
+        )
+    return user
+
+
+def _opds_root_feed() -> bytes:
+    # Build the root element IN the atom namespace so the default xmlns
+    # is emitted on the <feed> tag. SubElement() children inherit it.
+    root = _ET.Element("{%s}feed" % _OPDS_ATOM)
+    root.append(_xml_text("id",   "urn:codexserver:opds:root"))
+    root.append(_xml_text("title", "CodexServer Catalog"))
+    root.append(_xml_text("updated", _opds_iso(None)))
+    # Navigation entry to the acquisition feed.
+    root.append(_xml_link(
+        href="/opds/books",
+        rel="http://opds-spec.org/catalog",
+        type_="application/atom+xml;profile=opds-catalog",
+        title="All books",
+    ))
+    return _opds_xml(_ET.ElementTree(root))
+
+
+def _opds_books_feed(books: list, root_url: str) -> bytes:
+    feed = _ET.Element("{%s}feed" % _OPDS_ATOM)
+
+    feed.append(_xml_text("id",    "urn:codexserver:opds:books"))
+    feed.append(_xml_text("title", "All books"))
+    feed.append(_xml_text("updated", _opds_iso(None)))
+    feed.append(_xml_link(
+        href="/opds/books",
+        rel="self",
+        type_="application/atom+xml;profile=opds-catalog",
+    ))
+
+    for b in books:
+        entry = _ET.SubElement(feed, "entry")
+        entry.append(_xml_text("id",     f"urn:codexserver:book:{b.id}"))
+        entry.append(_xml_text("title",  _esc(b.title)))
+        entry.append(_xml_text("updated", _opds_iso(b.added_at)))
+
+        author = _ET.SubElement(entry, "author")
+        author.append(_xml_text("name", _esc(b.author or "Unknown Author")))
+
+        # Summary: <dcterms:extent> for size, <summary> empty.
+        summary = _xml_text("summary", "")
+        entry.append(summary)
+
+        # Acquisition link: download the EPUB.
+        entry.append(_xml_link(
+            href=f"/opds/download/{b.id}",
+            rel="http://opds-spec.org/acquisition",
+            type_="application/epub+zip",
+            title="Download EPUB",
+        ))
+
+        # Optional thumbnail: cover image, falls back silently to 404 if absent.
+        entry.append(_xml_link(
+            href=f"/opds/cover/{b.id}",
+            rel="http://opds-spec.org/image/thumbnail",
+            type_="image/jpeg",
+        ))
+
+        # dcterms:extent as human-readable size in bytes.
+        if b.file_size:
+            extent = _ET.SubElement(entry, "{%s}extent" % _OPDS_DC)
+            extent.text = str(b.file_size)
+
+        feed.append(entry)
+
+    return _opds_xml(_ET.ElementTree(feed))
+
+
+def _epub_cover(path: str) -> tuple[bytes, str] | None:
+    """Extract the cover image bytes from an EPUB.
+
+    Strategy:
+      1. Look for `cover.jpg`/`cover.jpeg`/`cover.png` in the EPUB root.
+      2. Else read META-INF/container.xml -> OPF -> first image with
+         `properties="cover-image"` or `meta name="cover"`.
+    Returns (bytes, mime) or None.
+    """
+    import zipfile
+    import posixpath as _p
+
+    try:
+        zf = zipfile.ZipFile(path, "r")
+    except Exception:
+        return None
+
+    try:
+        names = zf.namelist()
+
+        # (1) Heuristic root covers.
+        for cand in ("cover.jpg", "cover.jpeg", "cover.png"):
+            if cand in names:
+                with zf.open(cand) as fh:
+                    return fh.read(), "image/jpeg" if cand.endswith((".jpg", ".jpeg")) else "image/png"
+
+        # (2) container.xml -> OPF
+        try:
+            container = _ET.fromstring(zf.read("META-INF/container.xml"))
+        except Exception:
+            return None
+
+        ns_c = {"c": "urn:oasis:names:tc:opendocument:xmlns:container"}
+        rootfile = container.find(".//c:rootfile", ns_c)
+        if rootfile is None:
+            return None
+        opf_path = rootfile.get("full-path")
+        if not opf_path:
+            return None
+        try:
+            opf = _ET.fromstring(zf.read(opf_path))
+        except Exception:
+            return None
+
+        ns_opf = {"opf": "http://www.idpf.org/2007/opf"}
+        opf_dir = _p.dirname(opf_path)
+
+        # Find <item> with properties="cover-image".
+        cover_id = None
+        for item in opf.findall(".//opf:manifest/opf:item", ns_opf):
+            props = item.get("properties", "") or ""
+            if "cover-image" in props.split():
+                cover_id = item.get("id")
+                break
+
+        # Else <meta name="cover" content="item-id">.
+        if cover_id is None:
+            for meta in opf.findall(".//opf:metadata/opf:meta", ns_opf):
+                if (meta.get("name") or "").lower() == "cover":
+                    cover_id = meta.get("content")
+                    if cover_id:
+                        break
+
+        if cover_id is None:
+            return None
+
+        # Map id -> href via manifest.
+        for item in opf.findall(".//opf:manifest/opf:item", ns_opf):
+            if item.get("id") == cover_id:
+                href = item.get("href")
+                if not href:
+                    return None
+                media_type = (item.get("media-type") or "image/jpeg").lower()
+                member = _p.normpath(_p.join(opf_dir, href))
+                with zf.open(member) as fh:
+                    return fh.read(), media_type
+
+        return None
+    finally:
+        zf.close()
+
+
+# ----------------------------------------------------------------- /opds
+@app.get("/opds", response_class=Response)
+def opds_root(user: User = Depends(_require_opds_auth)) -> Response:
+    """OPDS 1.2 catalog root (navigation feed)."""
+    return Response(
+        content=_opds_root_feed(),
+        media_type="application/atom+xml;profile=opds-catalog",
+    )
+
+
+# ------------------------------------------------------------ /opds/books
+@app.get("/opds/books", response_class=Response)
+def opds_books(user: User = Depends(_require_opds_auth), db: Session = Depends(get_db)) -> Response:
+    """OPDS 1.2 acquisition feed: every book in the catalog."""
+    rows = db.query(Book).order_by(Book.added_at.desc()).all()
+    return Response(
+        content=_opds_books_feed(rows, root_url=""),
+        media_type="application/atom+xml;profile=opds-catalog",
+    )
+
+
+# ------------------------------------------------------ /opds/download/{id}
+@app.get("/opds/download/{book_id}")
+def opds_download(book_id: int, user: User = Depends(_require_opds_auth),
+                  db: Session = Depends(get_db)) -> FileResponse:
+    book = db.get(Book, book_id)
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    src = Path(book.storage_path)
+    if not src.is_file():
+        raise HTTPException(status_code=410, detail="Book file is gone from its backend")
+    fname = f"{_esc(book.title)}.epub"
+    return FileResponse(
+        path=str(src),
+        media_type="application/epub+zip",
+        filename=fname,
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+# -------------------------------------------------------- /opds/cover/{id}
+@app.get("/opds/cover/{book_id}")
+def opds_cover(book_id: int, user: User = Depends(_require_opds_auth),
+               db: Session = Depends(get_db)) -> Response:
+    book = db.get(Book, book_id)
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    src = Path(book.storage_path)
+    if not src.is_file():
+        raise HTTPException(status_code=410, detail="Book file is gone")
+    cover = _epub_cover(str(src))
+    if cover is None:
+        # 404 keeps the OPDS feed honest; KOReader falls back to a placeholder.
+        raise HTTPException(status_code=404, detail="No cover image in EPUB")
+    data, mime = cover
+    return Response(content=data, media_type=mime)
 
 
 # ------------------------------------------------------------ /healthcheck
