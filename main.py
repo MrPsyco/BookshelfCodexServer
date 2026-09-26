@@ -498,9 +498,13 @@ def list_books(db: Session = Depends(get_db)) -> list[dict]:
     # Build a {koreader_hash: latest_progress} map for fast lookup.
     progress_by_doc: dict[str, float] = {}
     for doc, pct in db.query(KosyncProgress.document, KosyncProgress.percentage).all():
+        try:
+            pct_f = float(pct)
+        except (TypeError, ValueError):
+            continue
         cur = progress_by_doc.get(doc)
-        if cur is None or pct > cur:
-            progress_by_doc[doc] = pct
+        if cur is None or pct_f > cur:
+            progress_by_doc[doc] = pct_f
     rows = db.query(Book).order_by(Book.added_at.desc()).all()
     out = []
     for b in rows:
