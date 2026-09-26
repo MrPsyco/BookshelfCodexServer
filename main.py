@@ -495,13 +495,31 @@ def delete_koreader_user(uid: int, db: Session = Depends(get_db)) -> dict:
 
 @app.get("/api/books", dependencies=[Depends(require_ui_auth)])
 def list_books(db: Session = Depends(get_db)) -> list[dict]:
+    # Build a {koreader_hash: latest_progress} map for fast lookup.
+    progress_by_doc: dict[str, float] = {}
+    for doc, pct in db.query(KosyncProgress.document, KosyncProgress.percentage).all():
+        cur = progress_by_doc.get(doc)
+        if cur is None or pct > cur:
+            progress_by_doc[doc] = pct
     rows = db.query(Book).order_by(Book.added_at.desc()).all()
-    return [
-        {"id": b.id, "title": b.title, "author": b.author,
-         "storage_path": b.storage_path, "storage_backend": b.storage_backend,
-         "file_size": b.file_size, "added_at": b.added_at.isoformat()}
-        for b in rows
-    ]
+    out = []
+    for b in rows:
+        ext = (b.storage_path.rsplit(".", 1)[-1] if "." in b.storage_path else "").lower()
+        mime = _OPDS_MIME_BY_EXT.get(ext, "application/octet-stream")
+        out.append({
+            "id": b.id,
+            "title": b.title,
+            "author": b.author,
+            "storage_path": b.storage_path,
+            "storage_backend": b.storage_backend,
+            "file_size": b.file_size,
+            "added_at": b.added_at.isoformat(),
+            "format": mime,
+            "format_ext": ext or None,
+            "koreader_hash": b.koreader_hash,
+            "progress": progress_by_doc.get(b.koreader_hash),
+        })
+    return out
 
 
 @app.post("/upload", dependencies=[Depends(require_ui_auth)])

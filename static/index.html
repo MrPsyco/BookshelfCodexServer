@@ -547,15 +547,32 @@
     $('#lib-count').textContent = books.length ? '(' + books.length + ')' : '';
     if (books.length === 0) { grid.innerHTML=''; empty.classList.remove('hidden'); return; }
     empty.classList.add('hidden');
-    grid.innerHTML = books.map(b => `
+    grid.innerHTML = books.map(b => {
+      const fmtBadge = b.format_ext
+        ? `<span class="absolute top-2 left-2 text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-950/85 text-slate-100 ring-1 ring-slate-700" title="${esc(b.format)}">${esc(b.format_ext)}</span>`
+        : '';
+      const pct = (typeof b.progress === 'number') ? b.progress : null;
+      const progBar = pct !== null
+        ? `<div class="mt-2">
+             <div class="flex items-baseline justify-between text-[10px] text-slate-500">
+               <span>progress</span>
+               <span class="font-mono text-indigo-300">${Math.round(pct*100)}%</span>
+             </div>
+             <div class="mt-1 h-1 w-full bg-slate-800 rounded-full overflow-hidden">
+               <div class="h-full bg-indigo-500/80" style="width:${Math.min(100, Math.round(pct*100))}%"></div>
+             </div>
+           </div>`
+        : '<div class="mt-2 text-[10px] text-slate-600">not started</div>';
+      return `
       <article class="rounded-xl overflow-hidden cover-shadow bg-slate-900/40 border border-slate-800/60 hover:border-slate-700 transition">
-        <div class="aspect-[5/7] bg-slate-800">${coverSvg(b.title, b.author)}</div>
+        <div class="relative aspect-[5/7] bg-slate-800">${coverSvg(b.title, b.author)}${fmtBadge}</div>
         <div class="p-3">
           <div class="text-sm font-medium leading-snug line-clamp-2">${esc(b.title)}</div>
           <div class="text-xs text-slate-400 mt-1 line-clamp-1">${esc(b.author || '—')}</div>
-          <div class="text-[10px] text-slate-600 mt-2 truncate" title="${esc(b.storage_path)}">${esc(b.storage_backend)}</div>
+          ${progBar}
         </div>
-      </article>`).join('');
+      </article>`;
+    }).join('');
   }
 
   // ============================================= upload ===============
