@@ -510,6 +510,8 @@ def list_books(db: Session = Depends(get_db)) -> list[dict]:
     for b in rows:
         ext = (b.storage_path.rsplit(".", 1)[-1] if "." in b.storage_path else "").lower()
         mime = _OPDS_MIME_BY_EXT.get(ext, "application/octet-stream")
+        pct_raw = progress_by_doc.get(b.koreader_hash)
+        is_finished = pct_raw is not None and pct_raw >= 1.0
         out.append({
             "id": b.id,
             "title": b.title,
@@ -521,7 +523,9 @@ def list_books(db: Session = Depends(get_db)) -> list[dict]:
             "format": mime,
             "format_ext": ext or None,
             "koreader_hash": b.koreader_hash,
-            "progress": progress_by_doc.get(b.koreader_hash),
+            "progress": pct_raw,
+            "progress_pct": int(round(pct_raw * 100)) if pct_raw is not None else None,
+            "is_finished": is_finished,
         })
     return out
 
