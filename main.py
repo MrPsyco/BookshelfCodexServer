@@ -967,6 +967,39 @@ def _opds_entry_uuid(book_id: int) -> str:
     return "urn:uuid:" + str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"codexserver:book:{book_id}"))
 
 
+# OPDS acquisition MIME types per the OPDS spec + IANA registrations.
+# KOReader (DocumentRegistry / koplugins) keys on the type attribute: a
+# PDF with type=application/epub+zip is treated as not supported.
+# Add new formats here as the catalog ingests them.
+_OPDS_MIME_BY_EXT = {
+    "epub":  "application/epub+zip",
+    "pdf":   "application/pdf",
+    "mobi":  "application/x-mobipocket-ebook",
+    "azw":   "application/vnd.amazon.ebook",
+    "azw3":  "application/vnd.amazon.ebook",
+    "fb2":   "application/x-fictionbook+xml",
+    "djvu":  "image/vnd.djvu",
+    "djv":   "image/vnd.djvu",
+    "cbz":   "application/vnd.comicbook+zip",
+    "cbr":   "application/vnd.comicbook-rar",
+    "html":  "text/html",
+    "htm":   "text/html",
+    "txt":   "text/plain",
+    "rtf":   "application/rtf",
+    "odt":   "application/vnd.oasis.opendocument.text",
+}
+
+
+def _opds_mime_for_book(book: "Book") -> str:
+    """MIME type for a book, derived from its storage_path extension.
+    Falls back to application/octet-stream so KOReader still shows the
+    entry (with a generic icon) instead of dropping it silently.
+    """
+    path = getattr(book, "storage_path", "") or ""
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    return _OPDS_MIME_BY_EXT.get(ext, "application/octet-stream")
+
+
 # OPDS 1.2 acquisition-feed XML is hand-written rather than built via
 # ElementTree. Reasons:
 #   * KOReader's OPDS parser is strict: every <entry> needs xmlns="atom",
@@ -1039,11 +1072,14 @@ def _opds_books_feed(books: list) -> bytes:
         parts.append(f'  <author><name>{author}</name></author>\n')
         if b.file_size:
             parts.append(f'  <dc:extent>{int(b.file_size)}</dc:extent>\n')
-        # Acquisition link: the EPUB download.
+        # Acquisition link: the file download. The type attribute MUST
+        # match the actual file extension — KOReader's DocumentRegistry
+        # rejects unsupported MIME types with "file type not supported".
+        mime = _opds_mime_for_book(b)
         parts.append(
             '  <link rel="http://opds-spec.org/acquisition"'
             f' href="/opds/download/{b.id}"'
-            ' type="application/epub+zip"'
+            f' type="{mime}"'
             f' title="{title}"/>\n'
         )
         # Thumbnail: optional, KOReader falls back gracefully on 404.
