@@ -47,7 +47,7 @@ from sqlalchemy.orm import Session
 
 import epub_washer
 from database import get_db, init_db, SessionLocal
-from models import Book, KosyncProgress, MetadataConfig, Progress, StorageConfig, User
+from models import Book, KosyncProgress, MetadataConfig, Progress, StorageConfig, User, WebSession
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("codexserver")
@@ -88,20 +88,31 @@ def verify_password(plain: str, hashed: Optional[str]) -> bool:
 
 
 # =========================================================== SESSIONS ===
+#
+# Web UI sessions are persisted in the `web_sessions` table so they survive
+# container restarts. The cookie itself is a 64-char URL-safe token; the row
+# holds user/role snapshot and an expires_at timestamp. Expired rows are
+# pruned lazily on read and on insert.
 
-_sessions: dict[str, dict] = {}
 _sessions_lock = threading.Lock()
 
 
 def _new_session(user: User) -> str:
     token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + SESSION_TTL
     with _sessions_lock:
-        _sessions[token] = {
-            "user_id": user.id,
-            "username": user.username,
-            "role": user.role,
-            "expires": datetime.utcnow() + SESSION_TTL,
-        }
+        db = SessionLocal()
+        try:
+            db.add(WebSession(
+                token=token,
+                user_id=user.id,
+                username=user.username,
+                role=user.role,
+                expires_at=expires_at,
+            ))
+            db.commit()
+        finally:
+            db.close()
     return token
 
 
@@ -109,20 +120,32 @@ def _read_session(token: Optional[str]) -> Optional[dict]:
     if not token:
         return None
     with _sessions_lock:
-        s = _sessions.get(token)
-        if not s:
-            return None
-        if s["expires"] < datetime.utcnow():
-            _sessions.pop(token, None)
-            return None
-        return s
+        db = SessionLocal()
+        try:
+            row = db.query(WebSession).filter(WebSession.token == token).first()
+            if not row:
+                return None
+            if row.expires_at < datetime.utcnow():
+                db.delete(row)
+                db.commit()
+                return None
+            return {"user_id": row.user_id, "username": row.username, "role": row.role}
+        finally:
+            db.close()
 
 
 def _drop_session(token: Optional[str]) -> None:
     if not token:
         return
     with _sessions_lock:
-        _sessions.pop(token, None)
+        db = SessionLocal()
+        try:
+            row = db.query(WebSession).filter(WebSession.token == token).first()
+            if row:
+                db.delete(row)
+                db.commit()
+        finally:
+            db.close()
 
 
 def _set_session_cookie(resp: JSONResponse, token: str) -> JSONResponse:

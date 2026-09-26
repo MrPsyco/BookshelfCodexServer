@@ -101,6 +101,19 @@ class StorageConfig(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class WebSession(Base):
+    """Persistent Web UI session. Survives container restarts so the admin
+    does not have to log in again on every codexserver deploy."""
+    __tablename__ = "web_sessions"
+
+    token = Column(String(80), primary_key=True)            # cookie value (random URL-safe)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    username = Column(String(120), nullable=False)          # snapshot for logging/auditing
+    role = Column(String(20), nullable=False)               # snapshot (typically "admin")
+    expires_at = Column(DateTime, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class MetadataConfig(Base):
     """Metadata provider chain. Ordered by ascending priority (1 = tried first)."""
 
