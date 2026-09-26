@@ -1263,18 +1263,42 @@ def opds_books(user: User = Depends(_require_opds_auth), db: Session = Depends(g
 
 # ------------------------------------------------------ /opds/download/{id}
 @app.get("/opds/download/{book_id}")
+@app.head("/opds/download/{book_id}")
 def opds_download(book_id: int, user: User = Depends(_require_opds_auth),
-                  db: Session = Depends(get_db)) -> FileResponse:
+                  db: Session = Depends(get_db)):
+    """Stream a book file to the OPDS client.
+
+    KOReader's OPDS plugin (opds.koplugin/opdsbrowser.lua) does a HEAD
+    on the acquisition href first to discover the local filename (it
+    looks at Content-Disposition; falls back to the URL basename if no
+    disposition is set). With a URL like `/opds/download/1`, the
+    basename is "1" — no extension — so the file lands on the reader
+    as "1" and DocumentRegistry:hasProvider rejects it with
+    "file 1 is not supported".
+
+    Three things fix this:
+      1. A `@app.head` route on the same path so the HEAD probe succeeds.
+      2. A Content-Disposition with a properly-extended filename so
+         getServerFileName() extracts it cleanly.
+      3. The MIME type of the actual file (not hardcoded application/
+         epub+zip) so non-EPUB books also work.
+    """
     book = db.get(Book, book_id)
     if book is None:
         raise HTTPException(status_code=404, detail="Book not found")
     src = Path(book.storage_path)
     if not src.is_file():
         raise HTTPException(status_code=410, detail="Book file is gone from its backend")
-    fname = f"{_esc(book.title)}.epub"
+    mime = _opds_mime_for_book(book)
+    # Use the book's own extension (epub / pdf / mobi / ...); fall back
+    # to deriving one from the MIME so KOReader's hasProvider() finds
+    # a registered provider based on the local filename suffix.
+    src_suffix = src.suffix.lstrip(".").lower() or mime.split("/", 1)[-1].split("+", 1)[0]
+    safe_title = "".join(c if c.isalnum() or c in " _.-" else "_" for c in book.title).strip() or "book"
+    fname = f"{safe_title}.{src_suffix}"
     return FileResponse(
         path=str(src),
-        media_type="application/epub+zip",
+        media_type=mime,
         filename=fname,
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
