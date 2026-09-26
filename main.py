@@ -1178,15 +1178,22 @@ def _epub_cover(path: str) -> tuple[bytes, str] | None:
 # ----------------------------------------------------------------- /opds
 @app.get("/opds", response_class=Response)
 @app.head("/opds", response_class=Response)
-def opds_root(user: User = Depends(_require_opds_auth)) -> Response:
-    """OPDS 1.2 catalog root (navigation feed).
+def opds_root(user: User = Depends(_require_opds_auth), db: Session = Depends(get_db)) -> Response:
+    """OPDS 1.2 catalog root: returns ALL books directly as an acquisition
+    feed.
 
-    Also exposes HEAD so OPDS clients can probe availability without
-    downloading the full XML. (KOReader sends HEAD first, then GET;
-    the spec recommends serving both.)
+    Why combine root + acquisition in one feed? Because the OPDS spec
+    allows it, and several common clients (including older KOReader
+    builds) only follow links whose `type` matches the catalog type
+    *and* which appear inside entries — they ignore navigation links
+    on the root. Calibre's OPDS server does the same thing.
+
+    /opds/books is kept as an alias for clients that prefer to navigate
+    via subsection links first.
     """
+    rows = db.query(Book).order_by(Book.added_at.desc()).all()
     return Response(
-        content=_opds_root_feed(),
+        content=_opds_books_feed(rows),
         media_type="application/atom+xml;profile=opds-catalog",
     )
 
