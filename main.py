@@ -1192,9 +1192,19 @@ def opds_root(user: User = Depends(_require_opds_auth), db: Session = Depends(ge
     via subsection links first.
     """
     rows = db.query(Book).order_by(Book.added_at.desc()).all()
+    # Last-Modified is needed for KOReader's CatalogCache (see
+    # plugins/opds.koplugin/opdsbrowser.lua::parseFeed). Without it,
+    # the plugin won't cache and will refetch each time. We use the
+    # latest book added_at as the feed's mtime, which is monotonic
+    # under the order_by above.
+    last_mod = max((b.added_at for b in rows if b.added_at is not None), default=None)
+    headers = {"Cache-Control": "public, max-age=60"}
+    if last_mod is not None:
+        headers["Last-Modified"] = _rfc3339(last_mod.astimezone(_tz.utc))
     return Response(
         content=_opds_books_feed(rows),
         media_type="application/atom+xml;profile=opds-catalog",
+        headers=headers,
     )
 
 
@@ -1204,9 +1214,14 @@ def opds_root(user: User = Depends(_require_opds_auth), db: Session = Depends(ge
 def opds_books(user: User = Depends(_require_opds_auth), db: Session = Depends(get_db)) -> Response:
     """OPDS 1.2 acquisition feed: every book in the catalog."""
     rows = db.query(Book).order_by(Book.added_at.desc()).all()
+    last_mod = max((b.added_at for b in rows if b.added_at is not None), default=None)
+    headers = {"Cache-Control": "public, max-age=60"}
+    if last_mod is not None:
+        headers["Last-Modified"] = _rfc3339(last_mod.astimezone(_tz.utc))
     return Response(
         content=_opds_books_feed(rows),
         media_type="application/atom+xml;profile=opds-catalog",
+        headers=headers,
     )
 
 
