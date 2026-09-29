@@ -33,6 +33,10 @@ import signal
 import subprocess
 import threading
 import time
+import base64
+import posixpath
+import re
+import urllib.parse
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -47,7 +51,7 @@ from sqlalchemy.orm import Session
 
 import epub_washer
 from database import get_db, init_db, SessionLocal
-from models import Book, KosyncProgress, MetadataConfig, Progress, StorageConfig, User, WebSession
+from models import Book, ClientProgress, KosyncProgress, MetadataConfig, Progress, StorageConfig, User, WebSession
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("codexserver")
@@ -348,6 +352,8 @@ def _startup() -> None:
     init_db()
     Path(BOOKS_ROOT).mkdir(parents=True, exist_ok=True)
     CLOUD_MOUNT_ROOT.mkdir(parents=True, exist_ok=True)
+    WEBDAV_ROOT.mkdir(parents=True, exist_ok=True)
+    _backfill_client_progress()
 
     with SessionLocal() as db:
         needs_setup = not _admin_exists(db)
@@ -518,22 +524,26 @@ def delete_koreader_user(uid: int, db: Session = Depends(get_db)) -> dict:
 
 @app.get("/api/books", dependencies=[Depends(require_ui_auth)])
 def list_books(db: Session = Depends(get_db)) -> list[dict]:
-    # Build a {koreader_hash: latest_progress} map for fast lookup.
-    progress_by_doc: dict[str, float] = {}
-    for doc, pct in db.query(KosyncProgress.document, KosyncProgress.percentage).all():
-        try:
-            pct_f = float(pct)
-        except (TypeError, ValueError):
+    # Client-neutral progress: every sync protocol (kosync, moon_webdav, ...)
+    # upserts one row per (user, client, document) in `client_progress`.
+    # Per book we surface the FURTHEST position across users/clients, with
+    # `progress_clients` naming who reported what.
+    by_book: dict[int, list[tuple]] = {}
+    for doc, pct, client, ts in db.query(
+        ClientProgress.document, ClientProgress.percentage,
+        ClientProgress.client, ClientProgress.timestamp,
+    ).all():
+        book = _dav_book_for_key(db, doc or "")
+        if book is None or pct is None:
             continue
-        cur = progress_by_doc.get(doc)
-        if cur is None or pct_f > cur:
-            progress_by_doc[doc] = pct_f
+        by_book.setdefault(book.id, []).append((float(pct), client, ts))
     rows = db.query(Book).order_by(Book.added_at.desc()).all()
     out = []
     for b in rows:
         ext = (b.storage_path.rsplit(".", 1)[-1] if "." in b.storage_path else "").lower()
         mime = _OPDS_MIME_BY_EXT.get(ext, "application/octet-stream")
-        pct_raw = progress_by_doc.get(b.koreader_hash)
+        entries = by_book.get(b.id) or []
+        pct_raw = max((e[0] for e in entries), default=None)
         is_finished = pct_raw is not None and pct_raw >= 1.0
         out.append({
             "id": b.id,
@@ -549,6 +559,7 @@ def list_books(db: Session = Depends(get_db)) -> list[dict]:
             "progress": pct_raw,
             "progress_pct": int(round(pct_raw * 100)) if pct_raw is not None else None,
             "is_finished": is_finished,
+            "progress_clients": sorted({e[1] for e in entries}),
         })
     return out
 
@@ -980,6 +991,249 @@ class _KosyncAuthDep:
         self.user = _kosync_auth_or_401(request, db)
 
 
+def _record_client_progress(
+    db: Session,
+    user: User,
+    client: str,
+    document: str,
+    percentage: Optional[float],
+    *,
+    page: Optional[int] = None,
+    position: Optional[str] = None,
+    book: Optional[Book] = None,
+    timestamp: Optional[int] = None,
+) -> None:
+    """Upsert the client-neutral progress row for (user, client, document).
+
+    Every protocol funnels through here, so the Web UI can read one table
+    regardless of which client produced the update. Protocol-specific tables
+    (e.g. `kosync_progress`) stay authoritative for their own wire format.
+    """
+    if book is None and document:
+        book = _dav_book_for_key(db, document)
+    if timestamp is None:
+        timestamp = int(time.time())
+    row = (
+        db.query(ClientProgress)
+        .filter(
+            ClientProgress.user_id == user.id,
+            ClientProgress.client == client,
+            ClientProgress.document == document,
+        )
+        .first()
+    )
+    if row is None:
+        row = ClientProgress(user_id=user.id, client=client, document=document)
+        db.add(row)
+    row.book_id = book.id if book else None
+    row.percentage = percentage
+    row.page = page
+    row.position = position
+    row.timestamp = timestamp
+    db.commit()
+
+
+def _backfill_client_progress() -> None:
+    """Mirror existing kosync_progress rows into client_progress once.
+
+    Runs on every startup but only touches documents that have no
+    client_progress row yet, so it is cheap after the first run.
+    """
+    with SessionLocal() as db:
+        existing = {
+            (r.user_id, r.document)
+            for r in db.query(ClientProgress.user_id, ClientProgress.document)
+            .filter(ClientProgress.client == "kosync").all()
+        }
+        added = 0
+        books = db.query(Book).all()
+        for row in db.query(KosyncProgress).all():
+            if (row.user_id, row.document) in existing:
+                continue
+            try:
+                pct = float(row.percentage)
+            except (TypeError, ValueError):
+                pct = None
+            try:
+                ts = int(row.timestamp or 0)
+            except (TypeError, ValueError):
+                ts = 0
+            book_id = None
+            for b in books:
+                if (b.koreader_hash or "").lower() == (row.document or "").lower():
+                    book_id = b.id
+                    break
+            db.add(ClientProgress(
+                user_id=row.user_id,
+                book_id=book_id,
+                client="kosync",
+                document=row.document,
+                percentage=pct,
+                position=row.progress,
+                timestamp=ts,
+            ))
+            added += 1
+        if added:
+            db.commit()
+            log.info("client_progress: backfilled %d kosync row(s)", added)
+
+
+# ============================================================ WEBDAV SYNC ===
+# Lightweight WebDAV endpoint for clients that sync reading positions as tiny
+# files rather than JSON (Moon+ Reader: `<ts>*<chapter>@<section>#<offset>:<pct>%`
+# in `<book>.po` under `.Moon+/Cache/`).  Writes are persisted on disk *and*
+# materialised into the client-neutral `client_progress` table so the Web UI
+# shows them next to KOReader/kosync progress.
+#
+# The OPDS block below is intentionally untouched by this module.
+#
+# Auth: HTTP Basic, same `users` table as OPDS/kosync.
+
+WEBDAV_ROOT = Path(os.environ.get("WEBDAV_ROOT", "/app/webdav"))
+_MOON_PO_RE = re.compile(
+    r"^([0-9]+)\*([0-9]+)@([0-9]+)#([0-9]+):([0-9]+(?:\.[0-9]+)?)%$"
+)
+
+
+def _dav_auth(request: Request, db: Session) -> User:
+    header = request.headers.get("authorization", "")
+    challenge = {"WWW-Authenticate": 'Basic realm="codexserver-dav"'}
+    if not header.lower().startswith("basic "):
+        raise HTTPException(status_code=401, detail="Basic auth required", headers=challenge)
+    try:
+        raw = base64.b64decode(header.split(None, 1)[1]).decode("utf-8")
+        username, _, password = raw.partition(":")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Malformed Basic header", headers=challenge)
+    user = db.query(User).filter(User.username == username).first()
+    if user is None or not verify_password(password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid WebDAV credentials", headers=challenge)
+    return user
+
+
+def _dav_relpath(request: Request) -> str:
+    decoded = urllib.parse.unquote(request.path_params.get("path", "") or "").replace("\\", "/")
+    parts = [p for p in decoded.split("/") if p not in ("", ".")]
+    if any(p == ".." for p in parts):
+        raise HTTPException(status_code=400, detail="Invalid WebDAV path")
+    return "/".join(parts)
+
+
+def _dav_user_root(user: User) -> Path:
+    root = WEBDAV_ROOT / str(user.id)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _dav_file(user: User, rel: str) -> Path:
+    root = _dav_user_root(user).resolve()
+    candidate = (root / rel).resolve() if rel else root
+    if candidate != root and root not in candidate.parents:
+        raise HTTPException(status_code=400, detail="Invalid WebDAV path")
+    return candidate
+
+
+def _dav_prop(target: Path, href: str) -> str:
+    is_dir = target.is_dir()
+    size = "" if is_dir else str(target.stat().st_size)
+    modified = datetime.utcfromtimestamp(target.stat().st_mtime).strftime(
+        "%a, %d %b %Y %H:%M:%S GMT"
+    )
+    resource = "<d:collection/>" if is_dir else ""
+    return (
+        f"<d:response><d:href>{href}</d:href>"
+        f"<d:propstat><d:prop><d:resourcetype>{resource}</d:resourcetype>"
+        f"<d:getcontentlength>{size}</d:getcontentlength>"
+        f"<d:getlastmodified>{modified}</d:getlastmodified></d:prop>"
+        f"<d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
+    )
+
+
+def _dav_href(rel: str, is_dir: bool) -> str:
+    href = "/dav/" + urllib.parse.quote(rel, safe="/.~+-_<>") if rel else "/dav/"
+    if is_dir and not href.endswith("/"):
+        href += "/"
+    return href
+
+
+def _dav_propfind(user: User, rel: str, depth: str) -> Response:
+    target = _dav_file(user, rel)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="WebDAV resource not found")
+    responses = [_dav_prop(target, _dav_href(rel, target.is_dir()))]
+    if target.is_dir() and depth != "0":
+        for child in sorted(target.iterdir(), key=lambda p: p.name.lower()):
+            child_rel = "/".join(x for x in (rel, child.name) if x)
+            responses.append(_dav_prop(child, _dav_href(child_rel, child.is_dir())))
+    body = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<d:multistatus xmlns:d="DAV:">' + "".join(responses) + "</d:multistatus>"
+    )
+    return Response(content=body, status_code=207, media_type="application/xml; charset=utf-8")
+
+
+def _dav_book_for_key(db: Session, key: str) -> Optional[Book]:
+    key = key.lower()
+    for book in db.query(Book).all():
+        stem = Path(book.storage_path).stem.lower()
+        title = re.sub(r"[^a-z0-9]+", "", (book.title or "").lower())
+        if key in {stem, (book.koreader_hash or "").lower(), title}:
+            return book
+    return None
+
+
+def _dav_record_moon_progress(user: User, rel: str, body: bytes, db: Session) -> None:
+    """Parse a Moon+ `.po` body and upsert one `client_progress` row."""
+    raw = body.decode("utf-8", errors="replace").strip()
+    match = _MOON_PO_RE.fullmatch(raw)
+    if not match:
+        log.info("WebDAV: unparsed .po payload for %s (stored verbatim)", rel)
+        return
+    timestamp_ms, _chapter, _section, _offset, percent = match.groups()
+    pct = float(percent) / 100.0
+    key = Path(rel).stem.lower()
+    _record_client_progress(
+        db, user, "moon_webdav", key, pct,
+        position=raw, timestamp=int(int(timestamp_ms) / 1000),
+    )
+    log.info("WebDAV progress: user=%s book=%s percent=%.4f", user.username, key, pct)
+
+
+@app.api_route("/dav", methods=["OPTIONS", "PROPFIND", "GET", "PUT", "MKCOL"])
+@app.api_route("/dav/{path:path}", methods=["OPTIONS", "PROPFIND", "GET", "PUT", "MKCOL"])
+async def webdav(request: Request, path: str = "", db: Session = Depends(get_db)) -> Response:
+    user = _dav_auth(request, db)
+    rel = _dav_relpath(request)
+    if request.method == "OPTIONS":
+        return Response(
+            status_code=200,
+            headers={"Allow": "OPTIONS, PROPFIND, GET, PUT, MKCOL", "DAV": "1"},
+        )
+    if request.method == "PROPFIND":
+        return _dav_propfind(user, rel, request.headers.get("depth", "1"))
+    target = _dav_file(user, rel)
+    if request.method == "MKCOL":
+        target.mkdir(parents=True, exist_ok=True)
+        return Response(status_code=201)
+    if request.method == "GET":
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="WebDAV file not found")
+        return Response(
+            content=target.read_bytes(),
+            media_type="application/octet-stream",
+            headers={"Content-Length": str(target.stat().st_size)},
+        )
+    # PUT
+    if not rel or rel.endswith("/"):
+        raise HTTPException(status_code=405, detail="PUT requires a file path")
+    existed = target.exists()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(await request.body())
+    if target.suffix.lower() == ".po":
+        _dav_record_moon_progress(user, rel, target.read_bytes(), db)
+    return Response(status_code=204 if existed else 201)
+
+
 # ============================================================ OPDS CATALOG =
 #
 # Minimal OPDS 1.2 Acquisition Feed for KOReader's built-in OPDS catalog
@@ -1078,7 +1332,7 @@ def _opds_root_feed() -> bytes:
         + f'<updated>{_opds_iso(None)}</updated>\n'
         + '<link rel="self"'
         + ' href="/opds"'
-        + ' type="application/atom+xml;profile=opds-catalog"/>\n'
+        + ' type="application/atom+xml; charset=utf-8; profile=opds-catalog"/>\n'
         # KOReader's OPDS plugin only follows `subsection` (not
         # `catalog`) as a navigation entry — see
         # plugins/opds.koplugin/opdsbrowser.lua::catalog_rel. Emit two
@@ -1105,7 +1359,7 @@ def _opds_books_feed(books: list) -> bytes:
         f'<updated>{_opds_iso(None)}</updated>\n',
         '<link rel="self"'
         ' href="/opds/books"'
-        ' type="application/atom+xml;profile=opds-catalog"/>\n',
+        ' type="application/atom+xml; charset=utf-8; profile=opds-catalog"/>\n',
     ]
     for b in books:
         title = _esc(b.title or "Untitled")
@@ -1260,7 +1514,12 @@ def _epub_cover(path: str) -> tuple[bytes, str] | None:
         zf.close()
 
 
-# ----------------------------------------------------------------- /opds
+# OPDS content type per OPDS 1.2 / RFC 5023. Some clients (notably Moon+
+# Reader) are picky: they want the charset spelled out AND the profile
+# parameter to match what their parser pattern-matches.
+OPDS_CONTENT_TYPE = "application/atom+xml; charset=utf-8; profile=opds-catalog"
+
+# ---------------------------------------------------------- /opds root
 @app.get("/opds", response_class=Response)
 @app.head("/opds", response_class=Response)
 def opds_root(user: User = Depends(_require_opds_auth), db: Session = Depends(get_db)) -> Response:
@@ -1288,7 +1547,7 @@ def opds_root(user: User = Depends(_require_opds_auth), db: Session = Depends(ge
         headers["Last-Modified"] = _rfc3339(last_mod.astimezone(_tz.utc))
     return Response(
         content=_opds_books_feed(rows),
-        media_type="application/atom+xml;profile=opds-catalog",
+        media_type=OPDS_CONTENT_TYPE,
         headers=headers,
     )
 
@@ -1305,7 +1564,7 @@ def opds_books(user: User = Depends(_require_opds_auth), db: Session = Depends(g
         headers["Last-Modified"] = _rfc3339(last_mod.astimezone(_tz.utc))
     return Response(
         content=_opds_books_feed(rows),
-        media_type="application/atom+xml;profile=opds-catalog",
+        media_type=OPDS_CONTENT_TYPE,
         headers=headers,
     )
 
@@ -1478,6 +1737,7 @@ async def kosync_put_progress(
         row.device_id = device_id
         row.timestamp = ts
     db.commit()
+    _record_client_progress(db, user, "kosync", doc, pct, position=progress)
     return _JSONResponse_kosync(
         status_code=200,
         content={"document": doc, "timestamp": ts},
@@ -1598,6 +1858,44 @@ def api_koreader_progress(
             "timestamp": prog.timestamp,
             "updated_at": prog.updated_at.isoformat() if prog.updated_at else None,
             "book_id": book.id if book else None,
+            "title": book.title if book else None,
+            "author": book.author if book else None,
+            "client": "kosync",
+        })
+    return out
+
+
+@app.get("/api/progress")
+def api_progress(
+    _admin: dict = Depends(require_ui_auth),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    """Client-neutral progress feed for the Web UI.
+
+    One row per (user, client, document) from `client_progress`, which every
+    sync protocol writes to. `client` is `kosync` for KOReader and
+    `moon_webdav` for Moon+ Reader over /dav.
+    """
+    rows = (
+        db.query(ClientProgress, User, Book)
+        .outerjoin(User, ClientProgress.user_id == User.id)
+        .outerjoin(Book, ClientProgress.book_id == Book.id)
+        .order_by(ClientProgress.updated_at.desc())
+        .all()
+    )
+    out = []
+    for prog, owner, book in rows:
+        out.append({
+            "id": prog.id,
+            "username": owner.username if owner else None,
+            "client": prog.client,
+            "document": prog.document,
+            "percentage": prog.percentage,
+            "page": prog.page,
+            "position": prog.position,
+            "timestamp": prog.timestamp,
+            "updated_at": prog.updated_at.isoformat() if prog.updated_at else None,
+            "book_id": prog.book_id,
             "title": book.title if book else None,
             "author": book.author if book else None,
         })

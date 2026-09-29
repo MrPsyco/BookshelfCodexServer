@@ -958,9 +958,9 @@
   }
   async function loadKoreaderSync() {
     let list = [];
-    try { list = await (await authedFetch('/api/koreader/progress')).json(); } catch { return; }
+    try { list = await (await authedFetch('/api/progress')).json(); } catch { return; }
     if (!list.length) {
-      $('#kosync-list').innerHTML = '<p class="text-xs text-slate-500">No sync activity yet. Open a book in KOReader to see the first reading position here.</p>';
+      $('#kosync-list').innerHTML = '<p class="text-xs text-slate-500">No sync activity yet. Open a book in KOReader (kosync) or Moon+ Reader (WebDAV) to see the first reading position here.</p>';
       $('#kosync-summary').textContent = '';
       return;
     }
@@ -969,19 +969,30 @@
       if (!ts) return '';
       try { return new Date(ts * 1000).toLocaleString(); } catch { return ''; }
     };
+    const clientBadge = c => {
+      const map = {
+        kosync:      ['KOReader', 'bg-indigo-900 text-indigo-200 ring-indigo-700'],
+        moon_webdav: ['Moon+',    'bg-amber-900 text-amber-200 ring-amber-700'],
+      };
+      const [name, cls] = map[c] || [c, 'bg-slate-800 text-slate-300 ring-slate-600'];
+      return `<span class="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ring-1 ${cls}">${esc(name)}</span>`;
+    };
     $('#kosync-list').innerHTML = list.map(p => {
       const label = p.title
         ? `<span class="text-sm font-medium text-slate-100">${esc(p.title)}</span><span class="text-[11px] text-slate-500 ml-2">${esc(p.author||'')}</span>`
-        : `<span class="text-xs font-mono text-slate-400">unmatched:<span class="text-slate-500">${esc(p.document.substring(0,16))}…</span></span>`;
+        : `<span class="text-xs font-mono text-slate-400">unmatched:<span class="text-slate-500">${esc(String(p.document||'').substring(0,16))}…</span></span>`;
       const pct = (typeof p.percentage === 'number') ? Math.round(p.percentage*100) + '%' : '';
+      const src = p.client === 'moon_webdav'
+        ? `client <span class="text-slate-300">Moon+ Reader</span> · WebDAV`
+        : `user <span class="text-slate-300">${esc(p.username||'')}</span> · device <span class="text-slate-300">${esc(p.device||'')}</span>`;
       return `
         <div class="rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
           <div class="flex items-baseline justify-between gap-2">
-            ${label}
+            <div class="flex items-center gap-2 min-w-0">${clientBadge(p.client)}${label}</div>
             <span class="text-xs text-indigo-300 font-mono whitespace-nowrap">${pct}</span>
           </div>
           <div class="flex items-center justify-between text-[11px] text-slate-500 mt-0.5">
-            <span>user <span class="text-slate-300">${esc(p.username||'')}</span> · device <span class="text-slate-300">${esc(p.device||'')}</span></span>
+            <span>${src}</span>
             <span>${when(p.timestamp)}</span>
           </div>
         </div>

@@ -1,6 +1,6 @@
 """SQLAlchemy ORM models for CodexServer."""
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text, Float
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -81,6 +81,27 @@ class KosyncProgress(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     user = relationship("User")
+
+
+class ClientProgress(Base):
+    """Canonical, client-neutral reading progress.
+
+    Every sync protocol writes one latest position per user and book/document.
+    Protocol-specific raw payloads remain available in their native stores;
+    this table is the stable Web UI/reporting surface.
+    """
+    __tablename__ = "client_progress"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="SET NULL"), nullable=True, index=True)
+    client = Column(String(40), nullable=False, index=True)  # kosync | moon_webdav | ...
+    document = Column(String(255), nullable=False, index=True)
+    percentage = Column(Float, nullable=True)
+    page = Column(Integer, nullable=True)
+    position = Column(Text, nullable=True)
+    timestamp = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
 class StorageConfig(Base):
