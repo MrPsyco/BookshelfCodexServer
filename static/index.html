@@ -131,15 +131,19 @@
             <p class="text-xs text-slate-400 mb-3">
               1. Klicke auf den Button – dein Browser öffnet den Google-Anmeldebildschirm.
             </p>
-            <button id="wiz-google-login" class="w-full bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded text-sm font-medium mb-3">
+            <button id="wiz-google-login" class="w-full bg-blue-600 hover:bg-blue-500 px-4 py-2.5 rounded text-sm font-medium mb-3">
               1. Bei Google anmelden
             </button>
+            <div class="rounded-md border border-amber-700/60 bg-amber-950/40 px-3 py-2 mb-3">
+              <p class="text-xs text-amber-300 font-medium">WICHTIG: Nach dem Login landest du auf einer Fehlerseite
+                („Website nicht erreichbar" / 127.0.0.1). Das ist normal und gewollt!</p>
+            </div>
             <p class="text-xs text-slate-400 mb-2">
-              2. Nach dem Login leitet Google dich auf <code>127.0.0.1:53682</code> um –
-              kopiere den <strong>Code</strong> aus der Adresszeile (nach <code>?code=</code>).
+              2. Kopiere aus der <strong>Adresszeile</strong> den Code, der direkt nach <code class="text-slate-200">code=</code>
+              steht (bis zum nächsten <code class="text-slate-200">&amp;</code>), und füge ihn unten ein.
             </p>
-            <input id="wiz-auth-code" placeholder="Auth-Code einfügen"
-                   class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm font-mono mb-1" />
+            <input id="wiz-auth-code" placeholder="Auth-Code hier einfügen…"
+                   class="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm font-mono mb-3" />
           </div>
           <p class="text-xs text-rose-400 hidden mt-2" id="wiz-err-oauth"></p>
           <div class="flex justify-between gap-2 mt-4">
@@ -158,12 +162,12 @@
             <button id="wiz-up" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 disabled:opacity-30">↑</button>
             <span id="wiz-curr" class="text-xs font-mono text-slate-300">/</span>
           </div>
-          <div id="wiz-dirs" class="border border-slate-800 rounded divide-y divide-slate-800 max-h-64 overflow-y-auto text-sm"></div>
+          <div id="wiz-dirs" class="border border-slate-800 rounded divide-y divide-slate-800 max-h-[50vh] overflow-y-auto text-sm"></div>
           <p class="text-xs text-rose-400 hidden mt-2" id="wiz-err-folder"></p>
-          <div class="flex justify-between gap-2 mt-4">
-            <button id="wiz-folder-back" class="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-200">Zurück</button>
+          <div class="flex justify-between gap-2 mt-4 sticky bottom-0 bg-slate-900 -mx-5 -mb-5 px-5 py-3 border-t border-slate-800">
+            <button id="wiz-folder-back" class="px-3 py-2 text-sm text-slate-400 hover:text-slate-200">Zurück</button>
             <div class="flex gap-2">
-              <button id="wiz-use-here" class="px-3 py-1.5 rounded text-sm bg-slate-700 hover:bg-slate-600 font-medium">Diesen Ordner verwenden</button>
+              <button id="wiz-use-here" class="px-4 py-2 rounded text-sm bg-indigo-600 hover:bg-indigo-500 font-medium">Diesen Ordner verwenden</button>
             </div>
           </div>
         </div>
@@ -1007,8 +1011,8 @@
         $('#wiz-dirs').innerHTML = '<p class="px-3 py-2 text-xs text-slate-500">Keine Unterordner.</p>';
       } else {
         $('#wiz-dirs').innerHTML = dirs.map(d =>
-          `<button data-dir="${esc(d)}" class="w-full text-left px-3 py-2 hover:bg-slate-800 flex items-center gap-2 text-slate-200">
-            <span class="text-slate-500">&#9656;</span>${esc(d)}</button>`).join('');
+          `<button data-dir="${esc(d)}" class="w-full text-left px-4 py-3 hover:bg-slate-800 focus:bg-slate-800 transition-colors flex items-center gap-3 text-slate-200 text-sm">
+            <span class="text-slate-500">&#9656;</span><span class="truncate">${esc(d)}</span></button>`).join('');
         $$('#wiz-dirs button[data-dir]').forEach(b =>
           b.addEventListener('click', () => wizBrowse(_wiz.path ? _wiz.path + '/' + b.dataset.dir : b.dataset.dir)));
       }
