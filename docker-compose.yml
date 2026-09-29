@@ -20,13 +20,21 @@ services:
     # If you prefer bridge networking, drop this and set the Ollama URL to
     # http://192.168.1.146:11434/api/generate in the Metadata settings UI.
     network_mode: host
-    # FUSE support for rclone mount --allow-other inside the container.
+    # =====================================================================
+    # FUSE / rclone mount — MANDATORY. Without all three of these,
+    # `rclone mount` fails (stale mounts surface as Errno 107 "Transport
+    # endpoint is not connected", fresh mounts as "fusermount: mount
+    # failed: Operation not permitted"):
+    #   cap_add:      - SYS_ADMIN
+    #   security_opt: - apparmor:unconfined
+    #   devices:      - /dev/fuse:/dev/fuse
+    # =====================================================================
     cap_add:
       - SYS_ADMIN
-    devices:
-      - /dev/fuse
     security_opt:
       - apparmor:unconfined
+    devices:
+      - "/dev/fuse:/dev/fuse"
     # Required so rclone can create its config file under a writable HOME
     # and so the kernel forwards FUSE ops for the bind-mounted host dir.
     tmpfs:

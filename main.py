@@ -278,6 +278,23 @@ def _ensure_rclone_config(db: Session) -> None:
     log.info("rclone config written with %d remote(s)", len(sections))
 
 
+def _force_unmount(mountpoint) -> None:
+    """Lazily detach any stale/dead FUSE mount before (re)mounting.
+
+    Errno 107 ("Transport endpoint is not connected") means a previous
+    rclone mount died but left a stale kernel mount. Detach it silently.
+    Both fusermount and umount can fail here (not yet mounted, missing
+    binary, etc.) -- those errors are intentionally ignored.
+    """
+    for cmd in (
+        ["fusermount", "-uz", str(mountpoint)],
+        ["umount", "-l", str(mountpoint)],
+    ):
+        try:
+            subprocess.run(cmd, capture_output=True, check=False)
+        except Exception:  # noqa: BLE001
+            pass
+
 def mount_storage(cfg: StorageConfig) -> dict:
     with _mounts_lock:
         existing = _mounts.get(cfg.id)
@@ -290,6 +307,7 @@ def mount_storage(cfg: StorageConfig) -> dict:
         raise ValueError("remote_name is required for non-local backends")
 
     mountpoint = CLOUD_MOUNT_ROOT / _slugify(f"{cfg.backend}_{cfg.remote_name}")
+    _force_unmount(mountpoint)
     mountpoint.mkdir(parents=True, exist_ok=True)
 
     remote_path = (cfg.remote_path or "/").lstrip("/")
@@ -333,7 +351,7 @@ def unmount_storage(cfg_id: int) -> dict:
                 proc.kill()
     finally:
         if mountpoint.exists():
-            subprocess.run(["fusermount", "-u", str(mountpoint)], capture_output=True, check=False)
+            subprocess.run(["fusermount", "-uz", str(mountpoint)], capture_output=True, check=False)
     return {"status": "unmounted", "mountpoint": str(mountpoint)}
 
 
