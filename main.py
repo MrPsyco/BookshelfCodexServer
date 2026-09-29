@@ -1645,6 +1645,28 @@ def opds_cover(book_id: int, user: User = Depends(_require_opds_auth),
     return Response(content=data, media_type=mime)
 
 
+# -------------------------------------------------------- /api/cover/{id} (Web UI)
+@app.get("/api/cover/{book_id}", dependencies=[Depends(require_ui_auth)])
+def ui_cover(book_id: int, db: Session = Depends(get_db)) -> Response:
+    """Cookie-authenticated cover endpoint for the Web UI.
+
+    /opds/cover/{id} is HTTP-Basic-only (OPDS clients), but the browser UI uses
+    a `codex_session` cookie — an <img> tag can't send a Basic header. This route
+    mirrors `opds_cover` with cookie auth so the Library can render real covers.
+    """
+    book = db.get(Book, book_id)
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    src = Path(book.storage_path)
+    if not src.is_file():
+        raise HTTPException(status_code=404, detail="Book file is gone")
+    cover = _epub_cover(str(src))
+    if cover is None:
+        raise HTTPException(status_code=404, detail="No cover image in EPUB")
+    data, mime = cover
+    return Response(content=data, media_type=mime)
+
+
 # ------------------------------------------------------------ /healthcheck
 @app.get("/healthcheck")
 def kosync_healthcheck(request: Request) -> _JSONResponse_kosync:

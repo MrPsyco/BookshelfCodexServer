@@ -707,7 +707,7 @@
           })();
       return `
       <article class="rounded-xl overflow-hidden cover-shadow bg-slate-900/40 border border-slate-800/60 hover:border-slate-700 transition">
-        <div class="relative aspect-[5/7] bg-slate-800 ${coverCls}">${coverSvg(b.title, b.author)}${fmtBadge}${finishBadge}</div>
+        <div class="relative aspect-[5/7] bg-slate-800 ${coverCls}">${coverSvg(b.title, b.author)}<img src="/api/cover/${b.id}" alt="" loading="lazy" class="absolute inset-0 w-full h-full object-cover" onerror="this.remove()">${fmtBadge}${finishBadge}</div>
         <div class="p-3">
           <div class="text-sm font-medium leading-snug line-clamp-2">${esc(b.title)}</div>
           <div class="text-xs text-slate-400 mt-1 line-clamp-1">${esc(b.author || '—')}</div>
