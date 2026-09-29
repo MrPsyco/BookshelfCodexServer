@@ -75,36 +75,93 @@
     </form>
   </div>
 
-  <!-- =================== OAuth Connect Modal ============================== -->
-  <div id="oauth-modal" class="fixed inset-0 z-50 hidden bg-black/70 flex items-center justify-center px-4">
-    <div class="w-full max-w-xl rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
+  <!-- =================== Storage Wizard Modal ============================ -->
+  <div id="wizard-modal" class="fixed inset-0 z-50 hidden bg-black/70 flex items-center justify-center px-4">
+    <div class="w-full max-w-xl rounded-xl border border-slate-700 bg-slate-900 shadow-2xl flex flex-col max-h-[90vh]">
       <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800">
-        <h2 id="oauth-title" class="font-semibold">Connect cloud drive</h2>
-        <button id="oauth-close" class="text-slate-500 hover:text-slate-200 text-xl leading-none">&times;</button>
+        <h2 class="font-semibold">Add cloud storage</h2>
+        <button id="wizard-close" class="text-slate-500 hover:text-slate-200 text-xl leading-none">&times;</button>
       </div>
-      <div class="p-5 space-y-4">
-        <div id="oauth-state-pending">
-          <p class="text-sm text-slate-300 mb-2">To connect, you'll need <code>rclone</code> on a machine with a browser:</p>
-          <pre id="oauth-instructions" class="rounded-lg bg-slate-950 border border-slate-800 p-3 text-xs text-slate-300"></pre>
-          <p class="text-xs text-slate-500 mt-3">
-            When rclone prints a JSON token line, paste it below and click <em>Complete connection</em>.
-          </p>
+      <div class="p-5 space-y-4 overflow-y-auto" id="wizard-body">
+
+        <!-- Step 0: choose service + label -->
+        <div id="wiz-step-choose">
+          <label class="text-xs text-slate-400">Dienst</label>
+          <select id="wiz-backend" class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm">
+            <option value="gdrive">Google Drive</option>
+            <option value="onedrive">OneDrive</option>
+            <option value="dropbox">Dropbox</option>
+            <option value="webdav">Nextcloud / WebDAV</option>
+            <option value="s3">S3-compatible</option>
+          </select>
+          <label class="text-xs text-slate-400 mt-3 block">Name</label>
+          <input id="wiz-label" placeholder="z. B. Mein Google Drive"
+                 class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
+          <div id="wiz-basic-fields" class="mt-3 space-y-2 hidden">
+            <input id="wiz-webdav-url" placeholder="WebDAV-URL (https://cloud.example.com/remote.php/dav/files/USER/)"
+                   class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm hidden" />
+            <div class="grid grid-cols-2 gap-2">
+              <input id="wiz-user" placeholder="Benutzer"
+                     class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm hidden" />
+              <input id="wiz-pass" type="password" placeholder="Passwort"
+                     class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm hidden" />
+            </div>
+            <input id="wiz-s3-key" placeholder="Access Key ID"
+                   class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm hidden" />
+            <input id="wiz-s3-secret" type="password" placeholder="Secret Access Key"
+                   class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm hidden" />
+            <input id="wiz-s3-endpoint" placeholder="Endpoint (z. B. https://s3.eu-central-1.amazonaws.com)"
+                   class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm hidden" />
+            <input id="wiz-s3-bucket" placeholder="Bucket"
+                   class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm hidden" />
+            <input id="wiz-s3-region" placeholder="Region (optional)"
+                   class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm hidden" />
+          </div>
+          <p class="text-xs text-rose-400 hidden mt-2" id="wiz-err-choose"></p>
+          <div class="flex justify-end gap-2 mt-4">
+            <button id="wiz-cancel" class="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-200">Abbrechen</button>
+            <button id="wiz-next" class="px-3 py-1.5 rounded text-sm bg-indigo-600 hover:bg-indigo-500 font-medium">Weiter</button>
+          </div>
         </div>
-        <div id="oauth-state-complete" class="hidden">
-          <p class="text-emerald-400 text-sm">Connected. Mounted.</p>
+
+        <!-- Step 1: OAuth connect (drive/onedrive/dropbox) OR skip -->
+        <div id="wiz-step-oauth" class="hidden">
+          <p class="text-sm text-slate-300 mb-2">Verbinde <span id="wiz-oauth-backend" class="font-medium"></span>:</p>
+          <div id="wiz-oauth-oauth">
+            <ol class="list-decimal list-inside text-xs text-slate-400 space-y-1 mb-2">
+              <li>Auf einem Gerät mit Browser <code>rclone authorize <span id="wiz-oauth-cmd"></span></code> ausführen.</li>
+              <li>Bei Google/Microsoft/Dropbox anmelden und „Erlauben" klicken.</li>
+              <li>Die ausgegebene JSON-Token-Zeile unten einfügen.</li>
+            </ol>
+            <textarea id="wiz-token" rows="4"
+                      class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-xs font-mono"
+                      placeholder='{"access_token":"...","refresh_token":"...","expiry":"..."}'></textarea>
+          </div>
+          <p class="text-xs text-rose-400 hidden mt-2" id="wiz-err-oauth"></p>
+          <div class="flex justify-between gap-2 mt-4">
+            <button id="wiz-back" class="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-200">Zurück</button>
+            <div class="flex gap-2">
+              <button id="wiz-skip-folder" class="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-200">Überspringen → Root</button>
+              <button id="wiz-auth" class="px-3 py-1.5 rounded text-sm bg-indigo-600 hover:bg-indigo-500 font-medium">Verbinden</button>
+            </div>
+          </div>
         </div>
-        <div id="oauth-state-error" class="hidden">
-          <p id="oauth-error" class="text-rose-400 text-sm"></p>
-        </div>
-        <div>
-          <label class="text-xs text-slate-400">Token blob (JSON from <code>rclone authorize</code>):</label>
-          <textarea id="oauth-token" rows="4"
-                    class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-xs"
-                    placeholder='{"access_token":"...","expires":...}'></textarea>
-        </div>
-        <div class="flex justify-end gap-2">
-          <button id="oauth-cancel" class="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-200">Cancel</button>
-          <button id="oauth-complete" class="px-3 py-1.5 rounded text-sm bg-indigo-600 hover:bg-indigo-500 font-medium">Complete connection</button>
+
+        <!-- Step 2: choose folder (explorer tree) -->
+        <div id="wiz-step-folder" class="hidden">
+          <p class="text-sm text-slate-300 mb-2">Ordner wählen:</p>
+          <div class="flex items-center gap-2 mb-2">
+            <button id="wiz-up" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 disabled:opacity-30">↑</button>
+            <span id="wiz-curr" class="text-xs font-mono text-slate-300">/</span>
+          </div>
+          <div id="wiz-dirs" class="border border-slate-800 rounded divide-y divide-slate-800 max-h-64 overflow-y-auto text-sm"></div>
+          <p class="text-xs text-rose-400 hidden mt-2" id="wiz-err-folder"></p>
+          <div class="flex justify-between gap-2 mt-4">
+            <button id="wiz-folder-back" class="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-200">Zurück</button>
+            <div class="flex gap-2">
+              <button id="wiz-use-here" class="px-3 py-1.5 rounded text-sm bg-slate-700 hover:bg-slate-600 font-medium">Diesen Ordner verwenden</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -229,35 +286,12 @@
         <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
           <div class="flex items-center justify-between mb-3">
             <h3 class="font-medium">Storage Backends</h3>
+            <button id="add-storage-btn" class="bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded text-sm font-medium">+ Add storage</button>
           </div>
-          <p class="text-xs text-amber-400/80 mb-3">
-            Cloud backends are FUSE-mounted via <code>rclone mount</code> at
-            <code>/mnt/cloud/&lt;backend&gt;_&lt;name&gt;</code>.
+          <p class="text-xs text-slate-500 mb-3">
+            Cloud-Speicher (Google Drive, OneDrive, Dropbox, WebDAV, S3) in wenigen
+            Schritten einbinden: Dienst wählen, verbinden, Ordner anklicken.
           </p>
-          <form id="storage-form" class="space-y-2">
-            <input name="label" required placeholder="Label (e.g. My GDrive)"
-                   class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
-            <select name="backend" id="storage-backend" class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm">
-              <option value="local">Lokales NAS (default)</option>
-              <option value="gdrive">Google Drive</option>
-              <option value="onedrive">OneDrive</option>
-              <option value="dropbox">Dropbox</option>
-              <option value="webdav">Nextcloud / WebDAV</option>
-              <option value="s3">S3 / generic S3-compatible</option>
-            </select>
-            <div class="grid grid-cols-2 gap-2">
-              <input name="remote_name" placeholder="rclone remote name"
-                     class="bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
-              <input name="remote_path" placeholder="/Books (subfolder)"
-                     class="bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
-            </div>
-            <textarea name="credentials_json" rows="3" id="credentials-json" placeholder='For gdrive/onedrive/dropbox/s3: {"token":"..."} or vendor-specific JSON. For webdav: {"url":"https://...","user":"...","pass":"..."}'
-                      class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-xs font-mono"></textarea>
-            <div class="flex gap-2">
-              <button id="save-storage" class="flex-1 bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 rounded text-sm font-medium">Save &amp; mount</button>
-              <button type="button" id="connect-oauth" class="hidden bg-emerald-700 hover:bg-emerald-600 px-3 py-1.5 rounded text-sm font-medium">Connect with OAuth</button>
-            </div>
-          </form>
           <div id="storage-list" class="mt-4 space-y-1 text-sm"></div>
         </div>
 
@@ -807,43 +841,186 @@
     }
   });
 
-  // =========================================== storage ===============
-  const OAUTH_BACKENDS = new Set(['gdrive', 'onedrive', 'dropbox', 'box']);
+// =========================================== storage ===============
+  const OAUTH_BACKENDS = new Set(['gdrive', 'onedrive', 'dropbox']);
+  const _wiz = { sid: null, backend: 'gdrive', label: '', path: '', mounted: false };
 
-  const BACKEND_DESC = {
-    local:    "Files live directly on this NAS under <code>/books</code>. Always available, no setup required.",
-    gdrive:   "Google Drive. Use 'Connect with OAuth' to paste a token from <code>rclone authorize drive</code>.",
-    onedrive: "Microsoft OneDrive. Same flow as Google Drive, with <code>rclone authorize onedrive</code>.",
-    dropbox:  "Dropbox. Use <code>rclone authorize dropbox</code> on a browser machine.",
-    webdav:   "Any WebDAV server (Nextcloud, ownCloud, generic). Paste <code>{url,user,pass}</code> into credentials.",
-    s3:       "Any S3-compatible storage (AWS, Backblaze, Wasabi, MinIO). Paste access key + endpoint.",
-  };
-
-  function refreshOAuthButton() {
-    const b = $('#storage-backend').value;
-    $('#connect-oauth').classList.toggle('hidden', !OAUTH_BACKENDS.has(b));
-    const hint = $('#credentials-json');
-    if (OAUTH_BACKENDS.has(b)) {
-      hint.placeholder = 'Leave empty for OAuth flow, or paste credentials manually.';
-    } else if (b === 'webdav') {
-      hint.placeholder = '{"url":"https://...","user":"...","pass":"..."}';
-    } else if (b === 's3') {
-      hint.placeholder = '{"provider":"AWS","access_key_id":"...","secret_access_key":"...","region":"...","endpoint":"..."}';
-    } else {
-      hint.placeholder = '(local backend - no credentials required)';
-    }
-    // Update help line below the form
-    let help = $('#storage-form-help');
-    if (!help) {
-      help = document.createElement('p');
-      help.id = 'storage-form-help';
-      help.className = 'text-[11px] text-slate-500 leading-relaxed';
-      $('#credentials-json').insertAdjacentElement('afterend', help);
-    }
-    help.innerHTML = BACKEND_DESC[b] || '';
+  function wizShow(step) {
+    ['wiz-step-choose','wiz-step-oauth','wiz-step-folder'].forEach(id =>
+      $('#' + id).classList.add('hidden'));
+    $('#' + step).classList.remove('hidden');
   }
-  $('#storage-backend').addEventListener('change', refreshOAuthButton);
-  refreshOAuthButton();
+  function wizErr(step, msg) {
+    const el = $('#wiz-err-' + step);
+    if (msg) { el.textContent = msg; el.classList.remove('hidden'); }
+    else el.classList.add('hidden');
+  }
+  function refreshWizFields() {
+    const b = _wiz.backend;
+    const isWebdav = b === 'webdav', isS3 = b === 's3';
+    $('#wiz-basic-fields').classList.toggle('hidden', !(isWebdav || isS3));
+    $('#wiz-webdav-url').classList.toggle('hidden', !isWebdav);
+    $('#wiz-user').classList.toggle('hidden', !isWebdav);
+    $('#wiz-pass').classList.toggle('hidden', !isWebdav);
+    ['wiz-s3-key','wiz-s3-secret','wiz-s3-endpoint','wiz-s3-bucket','wiz-s3-region'].forEach(id =>
+      $('#' + id).classList.toggle('hidden', !isS3));
+    const cmd = { gdrive:'drive', onedrive:'onedrive', dropbox:'dropbox' }[b] || '';
+    $('#wiz-oauth-cmd').textContent = cmd;
+  }
+
+  function openWizard(backend, label) {
+    _wiz.backend = backend || 'gdrive';
+    _wiz.label = label || '';
+    _wiz.path = '';
+    _wiz.mounted = false;
+    _wiz.sid = null;
+    $('#wiz-backend').value = _wiz.backend;
+    $('#wiz-label').value = _wiz.label;
+    $('#wiz-token').value = '';
+    wizErr('choose', null); wizErr('oauth', null); wizErr('folder', null);
+    refreshWizFields();
+    wizShow('wiz-step-choose');
+    $('#wizard-modal').classList.remove('hidden');
+  }
+  function closeWizard() {
+    $('#wizard-modal').classList.add('hidden');
+    loadStorage(); loadBackends();
+  }
+
+  $('#add-storage-btn').addEventListener('click', () => openWizard());
+  $('#wizard-close').addEventListener('click', closeWizard);
+  $('#wiz-cancel').addEventListener('click', closeWizard);
+  $('#wiz-backend').addEventListener('change', () => { _wiz.backend = $('#wiz-backend').value; refreshWizFields(); });
+
+  function wizCollectCredentials() {
+    if (_wiz.backend === 'webdav') {
+      const url = $('#wiz-webdav-url').value.trim();
+      const user = $('#wiz-user').value.trim();
+      const pass = $('#wiz-pass').value;
+      if (!url) { wizErr('choose', 'Bitte WebDAV-URL angeben.'); return null; }
+      return { url, user, pass };
+    }
+    if (_wiz.backend === 's3') {
+      const key = $('#wiz-s3-key').value.trim();
+      const secret = $('#wiz-s3-secret').value.trim();
+      const endpoint = $('#wiz-s3-endpoint').value.trim();
+      const bucket = $('#wiz-s3-bucket').value.trim();
+      if (!key || !secret || !endpoint || !bucket) {
+        wizErr('choose', 'Access Key, Secret, Endpoint und Bucket sind Pflicht.');
+        return null;
+      }
+      return { provider: 'Other', access_key_id: key, secret_access_key: secret,
+               endpoint, region: $('#wiz-s3-region').value.trim() || '' };
+    }
+    return null;
+  }
+
+  $('#wiz-next').addEventListener('click', async () => {
+    _wiz.label = $('#wiz-label').value.trim();
+    if (!_wiz.label) { wizErr('choose', 'Bitte einen Namen angeben.'); return; }
+    wizErr('choose', null);
+
+    if (_wiz.backend === 'webdav' || _wiz.backend === 's3') {
+      const creds = wizCollectCredentials();
+      if (!creds) return;
+      try {
+        const r = await authedFetch('/api/storage', {
+          method:'POST', headers:{'content-type':'application/json'},
+          body: JSON.stringify({ label: _wiz.label, backend: _wiz.backend,
+                                 credentials_json: JSON.stringify(creds), is_active: true })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { wizErr('choose', 'Speichern fehlgeschlagen: ' + (j.detail || r.status)); return; }
+        _wiz.sid = j.id; _wiz.mounted = true;
+        wizShow('wiz-step-folder'); await wizBrowse('');
+      } catch (e) { wizErr('choose', e.message); }
+      return;
+    }
+
+    $('#wiz-oauth-backend').textContent = _wiz.label || _wiz.backend;
+    wizShow('wiz-step-oauth');
+  });
+
+  $('#wiz-auth').addEventListener('click', async () => {
+    const blob = $('#wiz-token').value.trim();
+    if (!blob) { wizErr('oauth', 'Bitte JSON-Token einfügen.'); return; }
+    wizErr('oauth', null);
+    let sid = _wiz.sid;
+    try {
+      if (!sid) {
+        const r = await authedFetch('/api/storage', {
+          method:'POST', headers:{'content-type':'application/json'},
+          body: JSON.stringify({ label: _wiz.label, backend: _wiz.backend, is_active: true })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { wizErr('oauth', j.detail || ('HTTP ' + r.status)); return; }
+        sid = j.id; _wiz.sid = sid;
+      }
+      const r2 = await authedFetch('/api/storage/' + sid + '/auth_complete', {
+        method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({ token_blob: blob, mode: 'auto' })
+      });
+      const j2 = await r2.json().catch(() => ({}));
+      if (!r2.ok) { wizErr('oauth', j2.detail || ('HTTP ' + r2.status)); return; }
+      _wiz.mounted = true;
+      wizShow('wiz-step-folder'); await wizBrowse('');
+    } catch (e) { wizErr('oauth', e.message); }
+  });
+
+  $('#wiz-skip-folder').addEventListener('click', () => {
+    toast('Verbunden (Root-Ordner)', 'success');
+    closeWizard();
+  });
+
+  $('#wiz-back').addEventListener('click', () => wizShow('wiz-step-choose'));
+  $('#wiz-folder-back').addEventListener('click', () => {
+    if (OAUTH_BACKENDS.has(_wiz.backend) && _wiz.sid) wizShow('wiz-step-oauth');
+    else wizShow('wiz-step-choose');
+  });
+
+  async function wizBrowse(path) {
+    if (_wiz.backend === 'local') return;
+    _wiz.path = path || '';
+    $('#wiz-curr').textContent = '/' + (_wiz.path || '');
+    $('#wiz-up').disabled = !_wiz.path;
+    try {
+      const r = await authedFetch('/api/storage/' + _wiz.sid + '/browse', {
+        method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({ path: _wiz.path })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { wizErr('folder', j.detail || ('HTTP ' + r.status)); $('#wiz-dirs').innerHTML = ''; return; }
+      wizErr('folder', null);
+      const dirs = j.dirs || [];
+      if (!dirs.length) {
+        $('#wiz-dirs').innerHTML = '<p class="px-3 py-2 text-xs text-slate-500">Keine Unterordner.</p>';
+      } else {
+        $('#wiz-dirs').innerHTML = dirs.map(d =>
+          `<button data-dir="${esc(d)}" class="w-full text-left px-3 py-2 hover:bg-slate-800 flex items-center gap-2 text-slate-200">
+            <span class="text-slate-500">&#9656;</span>${esc(d)}</button>`).join('');
+        $$('#wiz-dirs button[data-dir]').forEach(b =>
+          b.addEventListener('click', () => wizBrowse(_wiz.path ? _wiz.path + '/' + b.dataset.dir : b.dataset.dir)));
+      }
+    } catch (e) { wizErr('folder', e.message); }
+  }
+  $('#wiz-up').addEventListener('click', () => {
+    const parts = _wiz.path.split('/').filter(Boolean);
+    parts.pop();
+    wizBrowse(parts.join('/'));
+  });
+
+  $('#wiz-use-here').addEventListener('click', async () => {
+    try {
+      const r = await authedFetch('/api/storage/' + _wiz.sid + '/select', {
+        method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({ path: _wiz.path })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { wizErr('folder', j.detail || ('HTTP ' + r.status)); return; }
+      toast('Ordner gewählt und gemountet', 'success');
+      closeWizard();
+    } catch (e) { wizErr('folder', e.message); }
+  });
 
   async function loadStorage() {
     let list = [];
@@ -851,29 +1028,24 @@
     $('#storage-list').innerHTML = list.map(s => {
       const authState = s.auth ? s.auth.state : 'idle';
       const authBadge = authState === 'complete'
-        ? '<span class="text-emerald-400">● authorized</span>'
-        : authState === 'error'
-          ? '<span class="text-rose-400">● auth-error</span>'
-          : authState === 'pending'
-            ? '<span class="text-amber-400">● auth-pending</span>'
-            : '';
+        ? '<span class="text-emerald-400">● verbunden</span>'
+        : (authState === 'error' ? '<span class="text-rose-400">● fehler</span>' : '');
       return `
       <div class="flex justify-between items-center rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
         <div class="text-sm">
           <span class="font-medium">${esc(s.label)}</span>
           <span class="text-slate-500"> · ${esc(s.backend)}</span>
-          ${s.remote_name ? '<span class="text-slate-500"> · ' + esc(s.remote_name) + ':' + esc(s.remote_path||'') + '</span>' : ''}
+          ${s.remote_path ? '<span class="text-slate-500"> · ' + esc(s.remote_path) + '</span>' : ''}
           <span class="ml-2 text-xs ${s.mounted?'text-emerald-400':'text-amber-400'}">${s.mounted?'● mounted':'○ unmounted'}</span>
           ${authBadge ? '<span class="ml-2 text-xs">' + authBadge + '</span>' : ''}
         </div>
         <div class="flex gap-2 text-xs">
-          ${OAUTH_BACKENDS.has(s.backend) ? '<button data-act="oauth" data-id="'+s.id+'" class="text-emerald-400 hover:text-emerald-300">connect</button>' : ''}
           ${s.backend!=='local' ? '<button data-act="mount" data-id="'+s.id+'" class="text-indigo-400 hover:text-indigo-300">'+(s.mounted?'remount':'mount')+'</button>' : ''}
           ${s.backend!=='local' ? '<button data-act="unmount" data-id="'+s.id+'" class="text-amber-400 hover:text-amber-300">unmount</button>' : ''}
           <button data-act="delete" data-id="${s.id}" class="text-rose-400 hover:text-rose-300">delete</button>
         </div>
       </div>`;
-    }).join('') || '<p class="text-xs text-slate-500">No storage configured.</p>';
+    }).join('') || '<p class="text-xs text-slate-500">Kein Cloud-Speicher. Klicke „+ Add storage".</p>';
     $$('#storage-list button[data-act]').forEach(b =>
       b.addEventListener('click', () => actStorage(b)));
   }
@@ -887,117 +1059,9 @@
       toast(j.status || 'mount request sent', j.mount_error ? 'error' : 'success');
     } else if (act === 'unmount') {
       await authedFetch('/api/storage/'+id+'/unmount', { method:'POST' });
-    } else if (act === 'oauth') {
-      openOAuthModal(id);
     }
     loadStorage(); loadBackends();
   }
-
-  // =========================================== OAuth modal ============
-  let _oauthStorageId = null;
-  async function openOAuthModal(sid) {
-    _oauthStorageId = sid;
-    $('#oauth-modal').classList.remove('hidden');
-    $('#oauth-state-pending').classList.add('hidden');
-    $('#oauth-state-complete').classList.add('hidden');
-    $('#oauth-state-error').classList.add('hidden');
-    $('#oauth-token').value = '';
-    try {
-      const r = await authedFetch('/api/storage/' + sid + '/auth_start', { method:'POST' });
-      const j = await r.json();
-      if (!r.ok) {
-        $('#oauth-state-error').classList.remove('hidden');
-        $('#oauth-error').textContent = j.detail || ('HTTP ' + r.status);
-        return;
-      }
-      $('#oauth-title').textContent = 'Connect ' + (j.backend || '') + (j.remote_name ? ' (' + j.remote_name + ')' : '');
-      $('#oauth-instructions').textContent = j.instructions || '';
-      $('#oauth-state-pending').classList.remove('hidden');
-    } catch (e) {
-      $('#oauth-state-error').classList.remove('hidden');
-      $('#oauth-error').textContent = 'Failed to fetch instructions: ' + e.message;
-    }
-  }
-  function closeOAuthModal() {
-    $('#oauth-modal').classList.add('hidden');
-    _oauthStorageId = null;
-    loadStorage(); loadBackends();
-  }
-  $('#oauth-close').addEventListener('click', closeOAuthModal);
-  $('#oauth-cancel').addEventListener('click', closeOAuthModal);
-  $('#oauth-complete').addEventListener('click', async () => {
-    if (!_oauthStorageId) return;
-    const blob = $('#oauth-token').value.trim();
-    if (!blob) {
-      $('#oauth-state-error').classList.remove('hidden');
-      $('#oauth-error').textContent = 'Paste the JSON token first.';
-      return;
-    }
-    try {
-      const r = await authedFetch('/api/storage/' + _oauthStorageId + '/auth_complete', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ token_blob: blob, mode: 'auto' })
-      });
-      const j = await r.json().catch(() => ({}));
-      if (r.ok) {
-        $('#oauth-state-pending').classList.add('hidden');
-        $('#oauth-state-error').classList.add('hidden');
-        $('#oauth-state-complete').classList.remove('hidden');
-        toast('Connected and mounted', 'success');
-        setTimeout(closeOAuthModal, 1200);
-      } else {
-        $('#oauth-state-pending').classList.add('hidden');
-        $('#oauth-state-complete').classList.add('hidden');
-        $('#oauth-state-error').classList.remove('hidden');
-        $('#oauth-error').textContent = j.detail || ('HTTP ' + r.status);
-      }
-    } catch (e) {
-      $('#oauth-state-error').classList.remove('hidden');
-      $('#oauth-error').textContent = e.message;
-    }
-  });
-
-  $('#connect-oauth').addEventListener('click', async () => {
-    const form = $('#storage-form');
-    const fd = new FormData(form);
-    const body = Object.fromEntries(fd.entries());
-    body.is_active = true;
-    if (!body.remote_name) { toast('remote_name is required for cloud backends', 'warning'); return; }
-    if (!body.credentials_json) body.credentials_json = null;
-    try {
-      const r = await authedFetch('/api/storage', {
-        method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) { toast('Save failed: ' + (j.detail || r.status), 'error'); return; }
-      form.reset(); refreshOAuthButton();
-      loadStorage(); loadBackends();
-      openOAuthModal(j.id);
-    } catch (e) {
-      toast('Save failed: ' + e.message, 'error');
-    }
-  });
-
-  $('#storage-form').addEventListener('submit', async e => {
-    e.preventDefault();
-    const body = Object.fromEntries(new FormData(e.target).entries());
-    body.is_active = true;
-    if (!body.remote_name) body.remote_name = null;
-    if (!body.remote_path) body.remote_path = null;
-    if (!body.credentials_json) body.credentials_json = null;
-    const r = await authedFetch('/api/storage', {
-      method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)
-    });
-    const j = await r.json().catch(() => ({}));
-    if (r.ok) {
-      if (j.mount_error) toast('Saved but mount failed: ' + j.mount_error, 'error');
-      else toast(j.backend === 'local' ? 'Storage saved' : 'Saved', 'success');
-    } else toast('Save failed: ' + (j.detail || r.status), 'error');
-    e.target.reset(); refreshOAuthButton();
-    loadStorage(); loadBackends();
-  });
 
   // =========================================== KOReader sync activity ===
   async function loadKoreaderSync() {

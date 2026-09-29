@@ -631,7 +631,7 @@ def create_storage(payload: StorageIn, db: Session = Depends(get_db)) -> dict:
     if payload.backend not in SUPPORTED_BACKENDS:
         raise HTTPException(400, f"backend must be one of {sorted(SUPPORTED_BACKENDS)}")
     if payload.backend != "local" and not payload.remote_name:
-        raise HTTPException(400, "remote_name is required for non-local backends")
+        payload.remote_name = _slugify(f"{payload.backend}_{payload.label}")
     s = StorageConfig(**payload.model_dump())
     db.add(s)
     db.commit()
@@ -775,6 +775,99 @@ def api_auth_complete(sid: int, payload: AuthCompleteIn, db: Session = Depends(g
         _set_auth_status(s, state="error", error=f"auth ok but mount failed: {e}")
         db.commit()
         raise HTTPException(500, f"auth ok but mount failed: {e}")
+
+
+# ============================================================ browse/select ===
+
+
+class BrowseIn(BaseModel):
+    path: str = ""
+
+
+class SelectIn(BaseModel):
+    path: str = ""
+
+
+def _list_remote_dirs(s: StorageConfig, path: str) -> list:
+    remote_path = (path or "").strip("/")
+    remote_spec = f"{s.remote_name}:" + (f"/{remote_path}" if remote_path else "")
+    out = subprocess.run(
+        ["rclone", "lsjson", remote_spec, "--config", str(RCLONE_CONFIG),
+         "--dirs-only", "--max-depth", "1"],
+        capture_output=True, text=True,
+    )
+    if out.returncode != 0:
+        raise RuntimeError((out.stderr or "rclone lsjson failed").strip())
+    try:
+        entries = json.loads(out.stdout)
+    except ValueError:
+        return []
+    return [e.get("Name", "") for e in entries if e.get("IsDir")]
+
+
+@app.post("/api/storage/{sid}/browse", dependencies=[Depends(require_ui_auth)])
+def api_browse(sid: int, payload: BrowseIn, db: Session = Depends(get_db)) -> dict:
+    s = db.get(StorageConfig, sid)
+    if not s:
+        raise HTTPException(404, "storage config not found")
+    path = (payload.path or "").strip("/")
+    if s.backend == "local":
+        root = Path(BOOKS_ROOT) / path if path else Path(BOOKS_ROOT)
+        try:
+            dirs = sorted(p.name for p in root.iterdir() if p.is_dir())
+        except FileNotFoundError:
+            dirs = []
+        parent = "/".join(path.split("/")[:-1]) if path else None
+        return {"backend": "local", "path": path, "parent": parent, "dirs": dirs}
+    _ensure_rclone_config(db)
+    try:
+        dirs = _list_remote_dirs(s, path)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"browse failed: {e}")
+    parent = "/".join(path.split("/")[:-1]) if path else None
+    return {"backend": s.backend, "path": path, "parent": parent, "dirs": dirs}
+
+
+@app.post("/api/storage/{sid}/select", dependencies=[Depends(require_ui_auth)])
+def api_select(sid: int, payload: SelectIn, db: Session = Depends(get_db)) -> dict:
+    s = db.get(StorageConfig, sid)
+    if not s:
+        raise HTTPException(404, "storage config not found")
+    if s.backend == "local":
+        return {"storage_id": sid, "remote_path": None}
+    s.remote_path = ("/" + (payload.path or "").strip("/")) if payload.path else None
+    db.commit()
+    if sid in _mounts:
+        unmount_storage(sid)
+    _ensure_rclone_config(db)
+    try:
+        m = mount_storage(s)
+        return {"storage_id": sid, "remote_path": s.remote_path, "mount": m}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"remount failed: {e}")
+
+
+class CredentialsIn(BaseModel):
+    credentials: dict
+
+
+@app.post("/api/storage/{sid}/credentials", dependencies=[Depends(require_ui_auth)])
+def api_set_credentials(sid: int, payload: CredentialsIn, db: Session = Depends(get_db)) -> dict:
+    """Set non-OAuth credentials (webdav url/user/pass, s3 keys) directly."""
+    s = db.get(StorageConfig, sid)
+    if not s:
+        raise HTTPException(404, "storage config not found")
+    if s.backend in _OAUTH_BACKENDS:
+        raise HTTPException(400, f"backend {s.backend!r} uses OAuth, not direct credentials")
+    s.credentials_json = json.dumps(payload.credentials)
+    db.commit()
+    _ensure_rclone_config(db)
+    try:
+        m = mount_storage(s)
+        return {"storage_id": sid, "mount": m}
+    except Exception as e:  # noqa: BLE001
+        log.exception("mount after credentials failed for storage id=%s", s.id)
+        raise HTTPException(500, f"credentials saved but mount failed: {e}")
 
 
 # ============================================================== metadata ===
