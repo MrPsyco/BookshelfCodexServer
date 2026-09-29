@@ -2042,9 +2042,10 @@ def api_progress(
 ) -> list[dict]:
     """Client-neutral progress feed for the Web UI.
 
-    One row per (user, client, document) from `client_progress`, which every
-    sync protocol writes to. `client` is `kosync` for KOReader and
-    `moon_webdav` for Moon+ Reader over /dav.
+    Aggregated to ONE entry per book (or unmatched document): the furthest
+    reading position across all sync clients, with every client that reported
+    it listed under `clients`. This avoids duplicate rows for the same book
+    when both KOReader (kosync) and Moon+ (moon_webdav) have pushed a position.
     """
     rows = (
         db.query(ClientProgress, User, Book)
@@ -2053,23 +2054,34 @@ def api_progress(
         .order_by(ClientProgress.updated_at.desc())
         .all()
     )
-    out = []
+    grouped: dict[str, dict] = {}
     for prog, owner, book in rows:
-        out.append({
-            "id": prog.id,
-            "username": owner.username if owner else None,
-            "client": prog.client,
-            "document": prog.document,
-            "percentage": prog.percentage,
-            "page": prog.page,
-            "position": prog.position,
-            "timestamp": prog.timestamp,
-            "updated_at": prog.updated_at.isoformat() if prog.updated_at else None,
-            "book_id": prog.book_id,
-            "title": book.title if book else None,
-            "author": book.author if book else None,
-        })
-    return out
+        key = f"book:{book.id}" if book else f"doc:{prog.document}"
+        entry = grouped.get(key)
+        if entry is None:
+            entry = {
+                "username": owner.username if owner else None,
+                "clients": [],
+                "document": prog.document,
+                "percentage": None,
+                "position": None,
+                "timestamp": 0,
+                "updated_at": None,
+                "book_id": book.id if book else None,
+                "title": book.title if book else None,
+                "author": book.author if book else None,
+            }
+            grouped[key] = entry
+        if prog.client not in entry["clients"]:
+            entry["clients"].append(prog.client)
+        # Furthest position wins: highest percentage, tie-break latest timestamp.
+        cur = entry["percentage"]
+        if cur is None or (prog.percentage is not None and prog.percentage > cur):
+            entry["percentage"] = prog.percentage
+            entry["position"] = prog.position
+            entry["timestamp"] = prog.timestamp
+            entry["updated_at"] = prog.updated_at.isoformat() if prog.updated_at else None
+    return list(grouped.values())
 
 
 # ============================================================== static ===
