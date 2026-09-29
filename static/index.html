@@ -1026,13 +1026,13 @@
         ? `<span class="text-sm font-medium text-slate-100">${esc(p.title)}</span><span class="text-[11px] text-slate-500 ml-2">${esc(p.author||'')}</span>`
         : `<span class="text-xs font-mono text-slate-400">unmatched:<span class="text-slate-500">${esc(String(p.document||'').substring(0,16))}…</span></span>`;
       const pct = (typeof p.percentage === 'number') ? Math.round(p.percentage*100) + '%' : '';
-      const clients = (p.clients && p.clients.length) ? p.clients : (p.client ? [p.client] : []);
-      const badges = clients.map(clientBadge).join('');
-      const src = `user <span class="text-slate-300">${esc(p.username||'')}</span>`;
+      const src = p.client === 'moon_webdav'
+        ? `client <span class="text-slate-300">Moon+ Reader</span> · WebDAV`
+        : `user <span class="text-slate-300">${esc(p.username||'')}</span> · device <span class="text-slate-300">${esc(p.device||'')}</span>`;
       return `
         <div class="rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
           <div class="flex items-baseline justify-between gap-2">
-            <div class="flex items-center gap-2 min-w-0">${badges}${label}</div>
+            <div class="flex items-center gap-2 min-w-0">${clientBadge(p.client)}${label}</div>
             <span class="text-xs text-indigo-300 font-mono whitespace-nowrap">${pct}</span>
           </div>
           <div class="flex items-center justify-between text-[11px] text-slate-500 mt-0.5">

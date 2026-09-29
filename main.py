@@ -2042,10 +2042,11 @@ def api_progress(
 ) -> list[dict]:
     """Client-neutral progress feed for the Web UI.
 
-    Aggregated to ONE entry per book (or unmatched document): the furthest
-    reading position across all sync clients, with every client that reported
-    it listed under `clients`. This avoids duplicate rows for the same book
-    when both KOReader (kosync) and Moon+ (moon_webdav) have pushed a position.
+    ONE entry per book (or unmatched document): the entry carries the
+    reader that synced MOST RECENTLY (highest `updated_at`), together with
+    that reader's percentage/timestamp. This is a true "last activity"
+    history — the furthest-reading aggregate lives separately in the
+    Library view, which is the meaningful place for progress bars.
     """
     rows = (
         db.query(ClientProgress, User, Book)
@@ -2057,30 +2058,20 @@ def api_progress(
     grouped: dict[str, dict] = {}
     for prog, owner, book in rows:
         key = f"book:{book.id}" if book else f"doc:{prog.document}"
-        entry = grouped.get(key)
-        if entry is None:
-            entry = {
-                "username": owner.username if owner else None,
-                "clients": [],
-                "document": prog.document,
-                "percentage": None,
-                "position": None,
-                "timestamp": 0,
-                "updated_at": None,
-                "book_id": book.id if book else None,
-                "title": book.title if book else None,
-                "author": book.author if book else None,
-            }
-            grouped[key] = entry
-        if prog.client not in entry["clients"]:
-            entry["clients"].append(prog.client)
-        # Furthest position wins: highest percentage, tie-break latest timestamp.
-        cur = entry["percentage"]
-        if cur is None or (prog.percentage is not None and prog.percentage > cur):
-            entry["percentage"] = prog.percentage
-            entry["position"] = prog.position
-            entry["timestamp"] = prog.timestamp
-            entry["updated_at"] = prog.updated_at.isoformat() if prog.updated_at else None
+        if key in grouped:
+            continue  # rows are ordered newest-first; first hit is the latest sync
+        grouped[key] = {
+            "username": owner.username if owner else None,
+            "client": prog.client,
+            "document": prog.document,
+            "percentage": prog.percentage,
+            "position": prog.position,
+            "timestamp": prog.timestamp,
+            "updated_at": prog.updated_at.isoformat() if prog.updated_at else None,
+            "book_id": book.id if book else None,
+            "title": book.title if book else None,
+            "author": book.author if book else None,
+        }
     return list(grouped.values())
 
 
