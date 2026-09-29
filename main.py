@@ -477,43 +477,50 @@ def auth_me(request: Request) -> dict:
 @app.get("/api/books", dependencies=[Depends(require_ui_auth)])
 def list_books(db: Session = Depends(get_db)) -> list[dict]:
     # Client-neutral progress: every sync protocol (kosync, moon_webdav, ...)
-    # upserts one row per (user, client, document) in `client_progress`.
-    # Per book we surface the FURTHEST position across users/clients, with
-    # `progress_clients` naming who reported what.
-    by_book: dict[int, list[tuple]] = {}
-    for doc, pct, client, ts in db.query(
-        ClientProgress.document, ClientProgress.percentage,
-        ClientProgress.client, ClientProgress.timestamp,
-    ).all():
-        book = _dav_book_for_key(db, doc or "")
-        if book is None or pct is None:
-            continue
-        by_book.setdefault(book.id, []).append((float(pct), client, ts))
-    rows = db.query(Book).order_by(Book.added_at.desc()).all()
-    out = []
-    for b in rows:
-        ext = (b.storage_path.rsplit(".", 1)[-1] if "." in b.storage_path else "").lower()
-        mime = _OPDS_MIME_BY_EXT.get(ext, "application/octet-stream")
-        entries = by_book.get(b.id) or []
-        pct_raw = max((e[0] for e in entries), default=None)
-        is_finished = pct_raw is not None and pct_raw >= 1.0
-        out.append({
-            "id": b.id,
-            "title": b.title,
-            "author": b.author,
-            "storage_path": b.storage_path,
-            "storage_backend": b.storage_backend,
-            "file_size": b.file_size,
-            "added_at": b.added_at.isoformat(),
-            "format": mime,
-            "format_ext": ext or None,
-            "koreader_hash": b.koreader_hash,
-            "progress": pct_raw,
-            "progress_pct": int(round(pct_raw * 100)) if pct_raw is not None else None,
-            "is_finished": is_finished,
-            "progress_clients": sorted({e[1] for e in entries}),
-        })
-    return out
+        # upserts one row per (user, client, document) in `client_progress`.
+        # Per book we surface whatever the MOST-RECENTLY-SYNCED reader reported,
+        # so Library and Settings agree on the same percentage for a book.
+        rows = (
+            db.query(ClientProgress)
+            .order_by(ClientProgress.updated_at.desc())
+            .all()
+        )
+        latest_by_book: dict[int, dict] = {}
+        for cp in rows:
+            book = _dav_book_for_key(db, cp.document or "")
+            if book is None or cp.percentage is None:
+                continue
+            if book.id in latest_by_book:
+                continue  # newest-first; first hit per book is the latest sync
+            latest_by_book[book.id] = {
+                "pct": float(cp.percentage),
+                "client": cp.client,
+            }
+        books = db.query(Book).order_by(Book.added_at.desc()).all()
+        out = []
+        for b in books:
+            ext = (b.storage_path.rsplit(".", 1)[-1] if "." in b.storage_path else "").lower()
+            mime = _OPDS_MIME_BY_EXT.get(ext, "application/octet-stream")
+            entry = latest_by_book.get(b.id)
+            pct_raw = entry["pct"] if entry else None
+            is_finished = pct_raw is not None and pct_raw >= 1.0
+            out.append({
+                "id": b.id,
+                "title": b.title,
+                "author": b.author,
+                "storage_path": b.storage_path,
+                "storage_backend": b.storage_backend,
+                "file_size": b.file_size,
+                "added_at": b.added_at.isoformat(),
+                "format": mime,
+                "format_ext": ext or None,
+                "koreader_hash": b.koreader_hash,
+                "progress": pct_raw,
+                "progress_pct": int(round(pct_raw * 100)) if pct_raw is not None else None,
+                "is_finished": is_finished,
+                "progress_client": entry["client"] if entry else None,
+            })
+        return out
 
 
 @app.post("/upload", dependencies=[Depends(require_ui_auth)])
