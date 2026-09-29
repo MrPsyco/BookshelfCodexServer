@@ -77,12 +77,12 @@
 
   <!-- =================== Storage Wizard Modal ============================ -->
   <div id="wizard-modal" class="fixed inset-0 z-50 hidden bg-black/70 flex items-center justify-center px-4">
-    <div class="w-full max-w-xl rounded-xl border border-slate-700 bg-slate-900 shadow-2xl flex flex-col max-h-[90vh]">
-      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800">
+    <div class="w-full max-w-xl rounded-xl border border-slate-700 bg-slate-900 shadow-2xl" style="display:flex; flex-direction:column; max-height:90vh; overflow:hidden;">
+      <div class="px-5 py-3 border-b border-slate-800" style="display:flex; flex-direction:row; align-items:center; justify-content:space-between; flex-shrink:0;">
         <h2 class="font-semibold">Add cloud storage</h2>
         <button id="wizard-close" class="text-slate-500 hover:text-slate-200 text-xl leading-none">&times;</button>
       </div>
-      <div class="p-5 space-y-4 overflow-y-auto" id="wizard-body">
+      <div class="p-5 space-y-4" id="wizard-body" style="flex:1 1 0%; min-height:0; overflow-y:auto;">
 
         <!-- Step 0: choose service + label -->
         <div id="wiz-step-choose">
@@ -156,15 +156,15 @@
         </div>
 
         <!-- Step 2: choose folder (explorer tree) -->
-        <div id="wiz-step-folder" class="hidden">
+        <div id="wiz-step-folder" class="hidden" style="display:flex; flex-direction:column;">
           <p class="text-sm text-slate-300 mb-2">Ordner wählen:</p>
-          <div class="flex items-center gap-2 mb-2">
+          <div class="flex items-center gap-2 mb-2" style="flex-shrink:0;">
             <button id="wiz-up" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 disabled:opacity-30">↑</button>
-            <span id="wiz-curr" class="text-xs font-mono text-slate-300">/</span>
+            <span id="wiz-curr" class="text-xs font-mono text-slate-300 truncate">/</span>
           </div>
-          <div id="wiz-dirs" class="border border-slate-800 rounded divide-y divide-slate-800 max-h-[50vh] overflow-y-auto text-sm"></div>
+          <div id="wiz-dirs" class="border border-slate-800 rounded divide-y divide-slate-800 text-sm" style="max-height:60vh; overflow-y:auto;"></div>
           <p class="text-xs text-rose-400 hidden mt-2" id="wiz-err-folder"></p>
-          <div class="flex justify-between gap-2 mt-4 sticky bottom-0 bg-slate-900 -mx-5 -mb-5 px-5 py-3 border-t border-slate-800">
+          <div class="flex justify-between gap-2 mt-4" style="flex-shrink:0;">
             <button id="wiz-folder-back" class="px-3 py-2 text-sm text-slate-400 hover:text-slate-200">Zurück</button>
             <div class="flex gap-2">
               <button id="wiz-use-here" class="px-4 py-2 rounded text-sm bg-indigo-600 hover:bg-indigo-500 font-medium">Diesen Ordner verwenden</button>
