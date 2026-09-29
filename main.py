@@ -472,54 +472,6 @@ def auth_me(request: Request) -> dict:
     return {"username": s["username"], "role": s["role"]}
 
 
-# ========================================================== KOReader users
-
-class KUserIn(BaseModel):
-    username: str
-    password: Optional[str] = None
-
-
-@app.get("/api/koreader/users", dependencies=[Depends(require_ui_auth)])
-def list_koreader_users(db: Session = Depends(get_db)) -> list[dict]:
-    rows = db.query(User).filter(User.role == "koreader").order_by(User.username).all()
-    return [
-        {"id": u.id, "username": u.username, "has_password": bool(u.password_hash),
-         "created_at": u.created_at.isoformat()} for u in rows
-    ]
-
-
-@app.post("/api/koreader/users", dependencies=[Depends(require_ui_auth)])
-def create_koreader_user(payload: KUserIn, db: Session = Depends(get_db)) -> dict:
-    username = payload.username.strip()
-    if not username:
-        raise HTTPException(400, "username required")
-    if db.query(User).filter(User.username == username).first():
-        raise HTTPException(400, "Username already taken")
-    generated = None
-    password = payload.password
-    if not password:
-        generated = secrets.token_urlsafe(12)
-        password = generated
-    u = User(username=username, role="koreader", password_hash=hash_password(password))
-    db.add(u)
-    db.commit()
-    db.refresh(u)
-    out = {"id": u.id, "username": u.username}
-    if generated:
-        out["generated_password"] = generated  # shown once in the UI
-    return out
-
-
-@app.delete("/api/koreader/users/{uid}", dependencies=[Depends(require_ui_auth)])
-def delete_koreader_user(uid: int, db: Session = Depends(get_db)) -> dict:
-    u = db.get(User, uid)
-    if not u or u.role != "koreader":
-        raise HTTPException(404, "koreader user not found")
-    db.delete(u)
-    db.commit()
-    return {"deleted": uid}
-
-
 # ================================================================ books ===
 
 @app.get("/api/books", dependencies=[Depends(require_ui_auth)])

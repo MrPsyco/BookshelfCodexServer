@@ -152,62 +152,6 @@
     </form>
   </div>
 
-  <!-- =================== Add KOReader User Modal ========================= -->
-  <div id="add-kuser-modal" class="fixed inset-0 z-50 hidden bg-black/70 flex items-center justify-center px-4">
-    <form id="add-kuser-form" class="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
-      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800">
-        <h2 class="font-semibold">Add KOReader user</h2>
-        <button type="button" id="add-kuser-close" class="text-slate-500 hover:text-slate-200 text-xl leading-none">&times;</button>
-      </div>
-      <div class="p-5 space-y-3">
-        <p class="text-xs text-slate-400">
-          KOReader on your e-reader needs its own user credentials. Basic Auth on
-          <code>/sync/*</code>. Username is anything stable, password is whatever
-          you want to set.
-        </p>
-        <div>
-          <label class="text-xs text-slate-400">Username (device name)</label>
-          <input id="add-kuser-name" type="text" required
-                 class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
-        </div>
-        <div>
-          <label class="text-xs text-slate-400">Password</label>
-          <input id="add-kuser-pass" type="password"
-                 class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm" />
-          <p class="text-[11px] text-slate-500 mt-1">Leave empty to auto-generate one (shown once).</p>
-        </div>
-        <p id="add-kuser-error" class="text-xs text-rose-400 hidden"></p>
-        <div class="flex justify-end gap-2 pt-1">
-          <button type="button" id="add-kuser-cancel" class="px-3 py-1.5 text-sm text-slate-400 hover:text-slate-200">Cancel</button>
-          <button class="px-3 py-1.5 rounded text-sm bg-indigo-600 hover:bg-indigo-500 font-medium">Add user</button>
-        </div>
-      </div>
-    </form>
-  </div>
-
-  <!-- =================== Generated Password Modal (KOReader) ============ -->
-  <div id="kpw-modal" class="fixed inset-0 z-50 hidden bg-black/70 flex items-center justify-center px-4">
-    <div class="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
-      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800">
-        <h2 class="font-semibold">Generated KOReader password</h2>
-        <button id="kpw-close" class="text-slate-500 hover:text-slate-200 text-xl leading-none">&times;</button>
-      </div>
-      <div class="p-5 space-y-3">
-        <p class="text-sm text-amber-300">
-          Save this now - it is <strong>not shown again</strong>. Enter it into
-          KOReader under <em>Setup &rarr; Sync &rarr; Custom server credentials</em>.
-        </p>
-        <div class="flex items-center gap-2">
-          <code id="kpw-value" class="flex-1 rounded-md bg-slate-950 border border-slate-800 px-3 py-2 text-sm font-mono"></code>
-          <button id="kpw-copy" class="px-3 py-1.5 text-sm border border-slate-700 rounded hover:bg-slate-800">copy</button>
-        </div>
-        <div class="flex justify-end pt-1">
-          <button id="kpw-ok" class="px-3 py-1.5 rounded text-sm bg-indigo-600 hover:bg-indigo-500 font-medium">I saved it</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- =================== Header / Navigation ============================== -->
   <header id="app-header" class="hidden border-b border-slate-800/80 bg-slate-900/70 backdrop-blur sticky top-0 z-30">
     <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
@@ -319,19 +263,6 @@
 
         <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
           <div class="flex items-center justify-between mb-3">
-            <h3 class="font-medium">KOReader Users</h3>
-            <button id="add-kuser-btn" class="text-xs text-indigo-400 hover:text-indigo-300">+ add</button>
-          </div>
-          <p class="text-xs text-slate-500 mb-3">
-            One user per e-reader. KOReader signs in with HTTP Basic Auth on
-            <code>/sync/*</code>. KOReader password is independent from your
-            admin password.
-          </p>
-          <div id="kusers-list" class="space-y-1 text-sm"></div>
-        </div>
-
-        <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
-          <div class="flex items-center justify-between mb-3">
             <h3 class="font-medium">KOReader Sync Activity</h3>
             <span id="kosync-summary" class="text-[11px] text-slate-500"></span>
           </div>
@@ -399,7 +330,7 @@
               <p class="text-[11px] text-slate-500 mt-1">
                 Format: <code>http://username:passwort@host:port/opds</code>.
                 Ersetze <code>username</code> und <code>passwort</code> durch die
-                Zugangsdaten eines KOReader-Users (Tab „Settings" → KOReader Users).
+                Zugangsdaten deines Logins (dein Username + Passwort).
               </p>
             </li>
             <li>Speichern und öffnen — die Bibliothek listet alle Bücher.</li>
@@ -439,7 +370,7 @@
                 <button data-copy="setup-ko-opds" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs">Copy</button>
               </div>
             </li>
-            <li>Benutzername + Passwort: KOReader-User aus dem Settings-Tab.</li>
+            <li>Benutzername + Passwort: dein Login.</li>
             <li>Speichern → Katalog öffnen → Bücher herunterladen.</li>
           </ol>
 
@@ -454,7 +385,7 @@
                 <button data-copy="setup-ko-sync" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs">Copy</button>
               </div>
             </li>
-            <li>Username + Passwort: derselbe KOReader-User.</li>
+            <li>Username + Passwort: dein Login.</li>
             <li><em>Test</em> drücken — Server sollte „success" melden.</li>
             <li>Im Buch liest KOReader die Position beim Schließen automatisch hoch
               (nicht pro Seitenwechsel). Im Web-UI unter <em>Settings</em> →
@@ -465,10 +396,8 @@
 
       <div class="mt-6 text-[11px] text-slate-500">
         Hinweis: Nutze auf all deinen eigenen Geräten und Lese-Apps denselben
-        Usernamen, damit dein Lesefortschritt überall synchron bleibt. Lege nur
-        dann zusätzliche User an (unter 'Settings' → KOReader Users), wenn andere
-        Personen denselben Server nutzen, damit sich eure Lesezeichen nicht
-        gegenseitig überschreiben.
+        Usernamen und dasselbe Passwort wie für dein Login, damit dein
+        Lesefortschritt überall synchron bleibt.
       </div>
     </section>
   </main>
@@ -643,7 +572,7 @@
     if (btn) btn.classList.add('bg-slate-800');
     if (name === 'library')  loadLibrary();
     if (name === 'upload')   loadBackends();
-    if (name === 'settings') { loadMetadata(); loadStorage(); loadKUsers(); }
+    if (name === 'settings') { loadMetadata(); loadStorage(); loadKoreaderSync(); }
     if (name === 'setup')    { renderSetup(); }
   }
   $$('.nav-btn').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
@@ -1070,22 +999,7 @@
     loadStorage(); loadBackends();
   });
 
-  // =========================================== KOReader users =========
-  async function loadKUsers() {
-    let list = [];
-    try { list = await (await authedFetch('/api/koreader/users')).json(); } catch { return; }
-    $('#kusers-list').innerHTML = list.map(u => `
-      <div class="flex items-center justify-between rounded-md border border-slate-800 bg-slate-950/60 px-3 py-1.5" data-id="${u.id}">
-        <div>
-          <span class="text-sm font-medium">${esc(u.username)}</span>
-          <span class="ml-2 text-[11px] ${u.has_password?'text-emerald-400':'text-slate-500'}">${u.has_password?'● pw set':'○ no password'}</span>
-        </div>
-        <button class="kuser-del text-xs text-rose-400 hover:text-rose-300">delete</button>
-      </div>
-    `).join('') || '<p class="text-xs text-slate-500">No KOReader users yet.</p>';
-    $$('.kuser-del').forEach(b => b.addEventListener('click', () => delKUser(b.closest('[data-id]'))));
-  loadKoreaderSync();
-  }
+  // =========================================== KOReader sync activity ===
   async function loadKoreaderSync() {
     let list = [];
     try { list = await (await authedFetch('/api/progress')).json(); } catch { return; }
@@ -1129,48 +1043,6 @@
       `;
     }).join('');
   }
-  async function delKUser(row) {
-    await authedFetch('/api/koreader/users/' + row.dataset.id, { method:'DELETE' });
-    loadKUsers();
-  }
-  function openAddKUserModal() {
-    $('#add-kuser-name').value = '';
-    $('#add-kuser-pass').value = '';
-    hideError($('#add-kuser-error'));
-    $('#add-kuser-modal').classList.remove('hidden');
-  }
-  $('#add-kuser-btn').addEventListener('click', openAddKUserModal);
-  $('#add-kuser-close').addEventListener('click', () => $('#add-kuser-modal').classList.add('hidden'));
-  $('#add-kuser-cancel').addEventListener('click', () => $('#add-kuser-modal').classList.add('hidden'));
-  $('#add-kuser-form').addEventListener('submit', async e => {
-    e.preventDefault();
-    hideError($('#add-kuser-error'));
-    const body = { username: $('#add-kuser-name').value.trim() };
-    if ($('#add-kuser-pass').value) body.password = $('#add-kuser-pass').value;
-    const r = await authedFetch('/api/koreader/users', {
-      method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)
-    });
-    if (r.ok) {
-      const j = await r.json();
-      $('#add-kuser-modal').classList.add('hidden');
-      loadKUsers();
-      if (j.generated_password) {
-        $('#kpw-value').textContent = j.generated_password;
-        $('#kpw-modal').classList.remove('hidden');
-      } else {
-        toast('User added', 'success');
-      }
-    } else {
-      const j = await r.json().catch(() => ({}));
-      showError($('#add-kuser-error'), j.detail || ('HTTP ' + r.status));
-    }
-  });
-  $('#kpw-close').addEventListener('click', () => $('#kpw-modal').classList.add('hidden'));
-  $('#kpw-ok').addEventListener('click', () => $('#kpw-modal').classList.add('hidden'));
-  $('#kpw-copy').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText($('#kpw-value').textContent);
-          toast('Copied', 'success'); } catch { toast('Clipboard blocked', 'error'); }
-  });
 
   // ================================================= setup tab ==========
   function setupBase() {
