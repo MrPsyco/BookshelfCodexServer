@@ -1629,8 +1629,15 @@ def opds_download(book_id: int, user: User = Depends(_require_opds_auth),
 
 # -------------------------------------------------------- /opds/cover/{id}
 @app.get("/opds/cover/{book_id}")
-def opds_cover(book_id: int, user: User = Depends(_require_opds_auth),
-               db: Session = Depends(get_db)) -> Response:
+def opds_cover(book_id: int, db: Session = Depends(get_db)) -> Response:
+    """Serve an EPUB's cover image.
+
+    Intentionally UNauthenticated: OPDS clients (Moon+ Reader in particular)
+    do not reliably resend the Basic-Auth header on subsequent cover/image
+    fetches, only on the feed request itself. Cover thumbnails carry no
+    sensitive data, so they are public to keep image loads working; the feed
+    and downloads remain Basic-auth-protected.
+    """
     book = db.get(Book, book_id)
     if book is None:
         raise HTTPException(status_code=404, detail="Book not found")
