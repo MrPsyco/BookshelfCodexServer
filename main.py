@@ -1077,6 +1077,28 @@ def _backfill_client_progress() -> None:
             db.commit()
             log.info("client_progress: backfilled %d kosync row(s)", added)
 
+        # Repair step: fix cross-client matching on existing moon_webdav rows
+        # whose `document` still carries an e-book extension (e.g.
+        # "anna-geschichten.epub") and/or whose `book_id` is NULL because the
+        # old key never matched `books.storage_path`. Re-normalises the key and
+        # re-resolves the book so both clients reference the same book entity.
+        repaired = 0
+        for cp in db.query(ClientProgress).filter(ClientProgress.client == "moon_webdav").all():
+            norm = _normalize_book_key(cp.document)
+            book = _dav_book_for_key(db, norm)
+            changed = False
+            if norm != cp.document:
+                cp.document = norm
+                changed = True
+            if book is not None and cp.book_id != book.id:
+                cp.book_id = book.id
+                changed = True
+            if changed:
+                repaired += 1
+        if repaired:
+            db.commit()
+            log.info("client_progress: repaired %d moon_webdav row(s)", repaired)
+
 
 # ============================================================ WEBDAV SYNC ===
 # Lightweight WebDAV endpoint for clients that sync reading positions as tiny
@@ -1172,14 +1194,139 @@ def _dav_propfind(user: User, rel: str, depth: str) -> Response:
     return Response(content=body, status_code=207, media_type="application/xml; charset=utf-8")
 
 
+_EBOOK_EXTENSIONS = {
+    "epub", "pdf", "mobi", "azw", "azw3", "fb2", "djvu", "djv",
+    "cbz", "cbr", "txt", "html", "htm", "rtf", "odt", "doc", "docx",
+}
+
+
+def _normalize_book_key(key: str) -> str:
+    """Strip both the progress-file extension (`.po`) AND any e-book
+    extension (`.epub`, `.pdf`, …) so a Moon+ `.po` filename resolves to the
+    same book entity as its `storage_path` stem and KOReader's hash.
+
+    Moon+ stores `<book>.po` under `.Moon+/Cache/` where `<book>` keeps the
+    original file extension, e.g. `Anna-Geschichten.epub.po`. Naively taking
+    `Path(...).stem` left `.epub` in the key, which then failed to match the
+    DB stem and left `book_id` NULL — the data-silo root cause.
+    """
+    key = key.strip().lower()
+    # Take only the basename so directory prefixes in `storage_path`
+    # (`/books/Funke, Cornelia/Anna-Geschichten.epub`) collapse to the bare
+    # filename and match the WebDAV relpath / Moon+ key.
+    if "/" in key or "\\" in key:
+        key = key.replace("\\", "/").rsplit("/", 1)[-1]
+    # Drop a trailing `.po` (Moon+/KOReader progress file suffix).
+    if "." in key:
+        base, ext = key.rsplit(".", 1)
+        if ext == "po":
+            key = base
+    # Drop a trailing e-book extension if present.
+    if "." in key:
+        base, ext = key.rsplit(".", 1)
+        if ext in _EBOOK_EXTENSIONS:
+            key = base
+    return key
+
 def _dav_book_for_key(db: Session, key: str) -> Optional[Book]:
-    key = key.lower()
+    key = _normalize_book_key(key)
     for book in db.query(Book).all():
-        stem = Path(book.storage_path).stem.lower()
+        stem = _normalize_book_key(book.storage_path)
         title = re.sub(r"[^a-z0-9]+", "", (book.title or "").lower())
         if key in {stem, (book.koreader_hash or "").lower(), title}:
             return book
     return None
+
+
+def _global_best_for_book(db: Session, user: User, book: Book) -> Optional[tuple[float, int]]:
+    """Highest (percentage, timestamp) across ALL clients for one book + user.
+
+    Cross-client sync: kosync (KOReader) and moon_webdav (Moon+ Reader) each
+    write their own `client_progress` row for the same book_id. This returns
+    whichever client is furthest, so a pull from either protocol can surface
+    the other client's position instead of staying siloed.
+    """
+    rows = (
+        db.query(ClientProgress)
+        .filter(
+            ClientProgress.user_id == user.id,
+            ClientProgress.book_id == book.id,
+            ClientProgress.percentage.isnot(None),
+        )
+        .all()
+    )
+    if not rows:
+        return None
+    best = max(rows, key=lambda r: (r.percentage or 0.0, r.timestamp or 0))
+    return (float(best.percentage), int(best.timestamp or 0))
+
+
+def _global_best_progress(db: Session, user: User, document: str) -> Optional[tuple[float, int, str]]:
+    """Look up the global best position for one document across ALL clients.
+
+    Takes the raw `document` string from the KOSync GET request (typically a
+    partial-MD5 hash) and resolves it via two strategies:
+      1. Exact match on `ClientProgress.document` (direct kosync path).
+      2. Map `document` → `Book` via `_dav_book_for_key`, then query by
+         `book_id` to gather every client's progress for that book.
+
+    Returns `(percentage, timestamp, position)` of the highest value across
+    all clients, or None when nothing exists for this document/user pair.
+    """
+    candidates: list[ClientProgress] = []
+
+    # Strategy 1: direct document lookup
+    direct = (
+        db.query(ClientProgress)
+        .filter(
+            ClientProgress.user_id == user.id,
+            ClientProgress.document == document,
+            ClientProgress.percentage.isnot(None),
+        )
+        .all()
+    )
+    candidates.extend(direct)
+
+    # Strategy 2: resolve document → book → all client_progress rows for that book
+    book = _dav_book_for_key(db, document)
+    if book is not None:
+        book_rows = (
+            db.query(ClientProgress)
+            .filter(
+                ClientProgress.user_id == user.id,
+                ClientProgress.book_id == book.id,
+                ClientProgress.percentage.isnot(None),
+            )
+            .all()
+        )
+        candidates.extend(book_rows)
+
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda r: (r.percentage or 0.0, r.timestamp or 0))
+    return (float(best.percentage), int(best.timestamp or 0), best.position or "")
+
+
+def _patch_po_progress(rel: str, body: bytes, best: tuple[float, int]) -> bytes:
+    """Patch a Moon+ `.po` body to a higher percentage from another client.
+
+    Keeps the existing chapter/section/offset, replaces timestamp (ms) and
+    percentage so Moon+ Reader resumes at the cross-client position rather
+    than its own, older local value. Returns `body` unchanged when the local
+    `.po` already reports an equal-or-further position.
+    """
+    text = body.decode("utf-8", errors="replace").strip()
+    match = _MOON_PO_RE.fullmatch(text)
+    cur_pct = (float(match.group(5)) / 100.0) if match else 0.0
+    best_pct, best_ts = best
+    if best_pct <= cur_pct:
+        return body
+    chapter = match.group(2) if match else "0"
+    section = match.group(3) if match else "0"
+    offset = match.group(4) if match else "0"
+    pct_disp = f"{best_pct * 100:g}"
+    new = f"{best_ts * 1000}*{chapter}@{section}#{offset}:{pct_disp}%"
+    return new.encode("utf-8")
 
 
 def _dav_record_moon_progress(user: User, rel: str, body: bytes, db: Session) -> None:
@@ -1191,7 +1338,7 @@ def _dav_record_moon_progress(user: User, rel: str, body: bytes, db: Session) ->
         return
     timestamp_ms, _chapter, _section, _offset, percent = match.groups()
     pct = float(percent) / 100.0
-    key = Path(rel).stem.lower()
+    key = _normalize_book_key(rel)
     _record_client_progress(
         db, user, "moon_webdav", key, pct,
         position=raw, timestamp=int(int(timestamp_ms) / 1000),
@@ -1218,12 +1365,21 @@ async def webdav(request: Request, path: str = "", db: Session = Depends(get_db)
     if request.method == "GET":
         if not target.is_file():
             raise HTTPException(status_code=404, detail="WebDAV file not found")
+        data = target.read_bytes()
+        # Cross-client sync: if this is a Moon+ `.po` and another client
+        # (e.g. KOReader via kosync) is further ahead, serve a patched `.po`
+        # reflecting the global best position instead of the stale on-disk one.
+        if target.suffix.lower() == ".po":
+            book = _dav_book_for_key(db, Path(rel).stem)
+            if book is not None:
+                best = _global_best_for_book(db, user, book)
+                if best is not None:
+                    data = _patch_po_progress(rel, data, best)
         return Response(
-            content=target.read_bytes(),
+            content=data,
             media_type="application/octet-stream",
-            headers={"Content-Length": str(target.stat().st_size)},
+            headers={"Content-Length": str(len(data))},
         )
-    # PUT
     if not rel or rel.endswith("/"):
         raise HTTPException(status_code=405, detail="PUT requires a file path")
     existed = target.exists()
@@ -1811,20 +1967,38 @@ def kosync_get_progress(
         .filter(KosyncProgress.user_id == user.id, KosyncProgress.document == document)
         .first()
     )
-    if row is None:
+    # Cross-client sync: look up the global best position for this document
+    # across ALL clients (kosync + moon_webdav) so KOReader pulls a further
+    # Moon+ position instead of staying siloed. Falls back to the kosync row
+    # when no cross-client entry exists (or the kosync row is the best).
+    global_best = _global_best_progress(db, user, document)
+    if global_best is None and row is None:
         return _JSONResponse_kosync(
             status_code=200,
             content={},
             headers={"Content-Type": "application/json"},
         )
+    if global_best is not None:
+        best_pct, best_ts, best_position = global_best
+        # Never leak a Moon+ `.po` payload back into KOReader's `progress`
+        # field — that field is KOReader's own position encoding. When the
+        # global best comes from WebDAV/Moon+, only the percentage + timestamp
+        # are translated; KOReader resumes at that percentage, not at a foreign
+        # offset string it cannot parse.
+        if best_position and _MOON_PO_RE.fullmatch(best_position.strip()):
+            best_position = ""
+    else:
+        best_pct = float(row.percentage) if row.percentage else 0.0
+        best_ts = row.timestamp
+        best_position = row.progress
     out: dict = {}
-    if row.device_id:
+    if row and row.device_id:
         out["device_id"] = row.device_id
-    out["progress"] = row.progress
-    out["document"] = row.document
-    out["percentage"] = float(row.percentage) if row.percentage else 0.0
-    out["timestamp"] = row.timestamp
-    out["device"] = row.device or ""
+    out["progress"] = best_position or ""
+    out["document"] = document
+    out["percentage"] = best_pct
+    out["timestamp"] = best_ts
+    out["device"] = (row.device if row else "") or ""
     return _JSONResponse_kosync(
         status_code=200,
         content=out,
