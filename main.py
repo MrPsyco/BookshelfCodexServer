@@ -37,7 +37,8 @@ import base64
 import posixpath
 import re
 import urllib.parse
-from datetime import datetime, timedelta
+import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -868,6 +869,98 @@ def api_set_credentials(sid: int, payload: CredentialsIn, db: Session = Depends(
     except Exception as e:  # noqa: BLE001
         log.exception("mount after credentials failed for storage id=%s", s.id)
         raise HTTPException(500, f"credentials saved but mount failed: {e}")
+
+
+# =============================================== Google OAuth (click-to-login) ===
+
+_GOOGLE_OAUTH_CLIENT_ID = "202264815644.apps.googleusercontent.com"
+_GOOGLE_OAUTH_CLIENT_SECRET = "X4Z3ca8xfWDb1Voo-F9a7ZxJ"
+_GOOGLE_OAUTH_REDIRECT_URI = "http://127.0.0.1:53682/"
+_GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/auth"
+_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_GOOGLE_SCOPE = "https://www.googleapis.com/auth/drive"
+
+
+def _gdrive_login_url() -> str:
+    params = {
+        "client_id": _GOOGLE_OAUTH_CLIENT_ID,
+        "redirect_uri": _GOOGLE_OAUTH_REDIRECT_URI,
+        "response_type": "code",
+        "scope": _GOOGLE_SCOPE,
+        "access_type": "offline",
+        "prompt": "consent",
+    }
+    return _GOOGLE_AUTH_URL + "?" + urllib.parse.urlencode(params)
+
+
+@app.get("/api/storage/oauth-login-url", dependencies=[Depends(require_ui_auth)])
+def api_oauth_login_url(backend: str = "gdrive") -> dict:
+    if backend == "gdrive":
+        return {"url": _gdrive_login_url()}
+    raise HTTPException(400, f"no click-to-login URL for backend {backend!r}")
+
+
+class AuthCodeIn(BaseModel):
+    code: str
+
+
+def _google_code_to_rclone_token(code: str) -> dict:
+    body = urllib.parse.urlencode({
+        "client_id": _GOOGLE_OAUTH_CLIENT_ID,
+        "client_secret": _GOOGLE_OAUTH_CLIENT_SECRET,
+        "redirect_uri": _GOOGLE_OAUTH_REDIRECT_URI,
+        "grant_type": "authorization_code",
+        "code": code,
+    }).encode()
+    req = urllib.request.Request(
+        _GOOGLE_TOKEN_URL, data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            tok = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        raise HTTPException(502, f"Google token exchange failed: {e.read().decode()}")
+    if "access_token" not in tok or "refresh_token" not in tok:
+        raise HTTPException(502, "Google returned no token (missing access/refresh token)")
+    # rclone expects an 'expiry' RFC3339 field, not Google's 'expires_in' seconds
+    expires_in = int(tok.get("expires_in", 3599))
+    expiry = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
+    return {
+        "access_token": tok["access_token"],
+        "token_type": tok.get("token_type", "Bearer"),
+        "refresh_token": tok["refresh_token"],
+        "expiry": expiry,
+    }
+
+
+@app.post("/api/storage/{sid}/auth_code", dependencies=[Depends(require_ui_auth)])
+def api_auth_code(sid: int, payload: AuthCodeIn, db: Session = Depends(get_db)) -> dict:
+    """Exchange the short Google auth code for a token, server-side."""
+    s = db.get(StorageConfig, sid)
+    if not s:
+        raise HTTPException(404, "storage config not found")
+    code = payload.code.strip()
+    if not code:
+        raise HTTPException(400, "code is empty")
+    try:
+        rclone_token = _google_code_to_rclone_token(code)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"token exchange failed: {e}")
+    s.credentials_json = json.dumps({"token": json.dumps(rclone_token)})
+    _set_auth_status(s, state="complete", error=None)
+    db.commit()
+    _ensure_rclone_config(db)
+    try:
+        m = mount_storage(s)
+        return {"storage_id": sid, "auth": "complete", "mount": m}
+    except Exception as e:  # noqa: BLE001
+        log.exception("mount after auth_code failed for storage id=%s", s.id)
+        _set_auth_status(s, state="error", error=f"auth ok but mount failed: {e}")
+        db.commit()
+        raise HTTPException(500, f"auth ok but mount failed: {e}")
 
 
 # ============================================================== metadata ===

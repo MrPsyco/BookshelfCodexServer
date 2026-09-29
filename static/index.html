@@ -127,15 +127,19 @@
         <!-- Step 1: OAuth connect (drive/onedrive/dropbox) OR skip -->
         <div id="wiz-step-oauth" class="hidden">
           <p class="text-sm text-slate-300 mb-2">Verbinde <span id="wiz-oauth-backend" class="font-medium"></span>:</p>
-          <div id="wiz-oauth-oauth">
-            <ol class="list-decimal list-inside text-xs text-slate-400 space-y-1 mb-2">
-              <li>Auf einem Gerät mit Browser <code>rclone authorize <span id="wiz-oauth-cmd"></span></code> ausführen.</li>
-              <li>Bei Google/Microsoft/Dropbox anmelden und „Erlauben" klicken.</li>
-              <li>Die ausgegebene JSON-Token-Zeile unten einfügen.</li>
-            </ol>
-            <textarea id="wiz-token" rows="4"
-                      class="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-xs font-mono"
-                      placeholder='{"access_token":"...","refresh_token":"...","expiry":"..."}'></textarea>
+          <div id="wiz-oauth-google">
+            <p class="text-xs text-slate-400 mb-3">
+              1. Klicke auf den Button – dein Browser öffnet den Google-Anmeldebildschirm.
+            </p>
+            <button id="wiz-google-login" class="w-full bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded text-sm font-medium mb-3">
+              1. Bei Google anmelden
+            </button>
+            <p class="text-xs text-slate-400 mb-2">
+              2. Nach dem Login leitet Google dich auf <code>127.0.0.1:53682</code> um –
+              kopiere den <strong>Code</strong> aus der Adresszeile (nach <code>?code=</code>).
+            </p>
+            <input id="wiz-auth-code" placeholder="Auth-Code einfügen"
+                   class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm font-mono mb-1" />
           </div>
           <p class="text-xs text-rose-400 hidden mt-2" id="wiz-err-oauth"></p>
           <div class="flex justify-between gap-2 mt-4">
@@ -864,8 +868,6 @@
     $('#wiz-pass').classList.toggle('hidden', !isWebdav);
     ['wiz-s3-key','wiz-s3-secret','wiz-s3-endpoint','wiz-s3-bucket','wiz-s3-region'].forEach(id =>
       $('#' + id).classList.toggle('hidden', !isS3));
-    const cmd = { gdrive:'drive', onedrive:'onedrive', dropbox:'dropbox' }[b] || '';
-    $('#wiz-oauth-cmd').textContent = cmd;
   }
 
   function openWizard(backend, label) {
@@ -876,7 +878,7 @@
     _wiz.sid = null;
     $('#wiz-backend').value = _wiz.backend;
     $('#wiz-label').value = _wiz.label;
-    $('#wiz-token').value = '';
+    $('#wiz-auth-code').value = '';
     wizErr('choose', null); wizErr('oauth', null); wizErr('folder', null);
     refreshWizFields();
     wizShow('wiz-step-choose');
@@ -941,9 +943,18 @@
     wizShow('wiz-step-oauth');
   });
 
+  $('#wiz-google-login').addEventListener('click', async () => {
+    try {
+      const r = await authedFetch('/api/storage/oauth-login-url?backend=gdrive');
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { wizErr('oauth', j.detail || ('HTTP ' + r.status)); return; }
+      window.open(j.url, '_blank');
+    } catch (e) { wizErr('oauth', e.message); }
+  });
+
   $('#wiz-auth').addEventListener('click', async () => {
-    const blob = $('#wiz-token').value.trim();
-    if (!blob) { wizErr('oauth', 'Bitte JSON-Token einfügen.'); return; }
+    const code = $('#wiz-auth-code').value.trim();
+    if (!code) { wizErr('oauth', 'Bitte den Auth-Code einfügen.'); return; }
     wizErr('oauth', null);
     let sid = _wiz.sid;
     try {
@@ -956,9 +967,9 @@
         if (!r.ok) { wizErr('oauth', j.detail || ('HTTP ' + r.status)); return; }
         sid = j.id; _wiz.sid = sid;
       }
-      const r2 = await authedFetch('/api/storage/' + sid + '/auth_complete', {
+      const r2 = await authedFetch('/api/storage/' + sid + '/auth_code', {
         method:'POST', headers:{'content-type':'application/json'},
-        body: JSON.stringify({ token_blob: blob, mode: 'auto' })
+        body: JSON.stringify({ code })
       });
       const j2 = await r2.json().catch(() => ({}));
       if (!r2.ok) { wizErr('oauth', j2.detail || ('HTTP ' + r2.status)); return; }
