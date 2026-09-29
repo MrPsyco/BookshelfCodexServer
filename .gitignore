@@ -9,3 +9,12 @@ __pycache__/
 .DS_Store
 *.db-journal
 tailwindcss
+
+# Cloud-storage FUSE mounts + rclone state — never commit these.
+/mnt/
+/cloud/
+/rclone/
+
+# Temp commit-message + scratch files
+cmsg*.txt
+*.preconsolidation

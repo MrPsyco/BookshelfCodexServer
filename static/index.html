@@ -247,7 +247,10 @@
     <section id="view-library" class="view">
       <div class="flex items-baseline justify-between mb-5">
         <h2 class="text-lg font-semibold tracking-tight">Library <span id="lib-count" class="text-slate-500 font-normal text-sm ml-2"></span></h2>
-        <button id="lib-refresh" class="text-xs text-slate-400 hover:text-slate-200">refresh</button>
+        <div class="flex items-center gap-3">
+          <span id="lib-scan" class="hidden text-xs text-indigo-300"></span>
+          <button id="lib-refresh" class="text-xs text-slate-400 hover:text-slate-200">refresh</button>
+        </div>
       </div>
       <div id="library-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4"></div>
       <div id="library-empty" class="hidden text-center py-24 text-slate-500">
@@ -646,8 +649,38 @@
     try { books = await (await authedFetch('/api/books')).json(); } catch { return; }
     const grid = $('#library-grid'), empty = $('#library-empty');
     $('#lib-count').textContent = books.length ? '(' + books.length + ')' : '';
-    if (books.length === 0) { grid.innerHTML=''; empty.classList.remove('hidden'); return; }
-    empty.classList.add('hidden');
+    if (books.length === 0) { grid.innerHTML=''; empty.classList.remove('hidden'); }
+    else { empty.classList.add('hidden'); renderLibraryGrid(books); }
+    // Check for an active background scan and auto-refresh when it finishes.
+    pollScan();
+  }
+
+  async function pollScan() {
+    const badge = $('#lib-scan');
+    let scan;
+    try { scan = await (await authedFetch('/api/scan/status')).json(); } catch { return; }
+    if (!scan.running) {
+      badge.classList.add('hidden');
+      return;
+    }
+    badge.classList.remove('hidden');
+    badge.textContent = 'Scanning…';
+    // Re-check every 2s; reload the shelf the moment the scan completes.
+    const timer = setInterval(async () => {
+      let st;
+      try { st = await (await authedFetch('/api/scan/status')).json(); } catch { return; }
+      if (!st.running) {
+        clearInterval(timer);
+        badge.classList.add('hidden');
+        const n = st.added || 0;
+        if (n > 0) toast('Scan fertig: ' + n + ' neue(s) Buch/Bücher', 'success');
+        loadLibrary();
+      }
+    }, 2000);
+  }
+
+  function renderLibraryGrid(books) {
+    const grid = $('#library-grid');
     grid.innerHTML = books.map(b => {
       const fmtBadge = b.format_ext
         ? `<span class="absolute top-2 left-2 text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-950/85 text-slate-100 ring-1 ring-slate-700" title="${esc(b.format)}">${esc(b.format_ext)}</span>`
@@ -1055,8 +1088,6 @@
           ${authBadge ? '<span class="ml-2 text-xs">' + authBadge + '</span>' : ''}
         </div>
         <div class="flex gap-2 text-xs">
-          ${s.backend!=='local' ? '<button data-act="mount" data-id="'+s.id+'" class="text-indigo-400 hover:text-indigo-300">'+(s.mounted?'remount':'mount')+'</button>' : ''}
-          ${s.backend!=='local' ? '<button data-act="unmount" data-id="'+s.id+'" class="text-amber-400 hover:text-amber-300">unmount</button>' : ''}
           <button data-act="delete" data-id="${s.id}" class="text-rose-400 hover:text-rose-300">delete</button>
         </div>
       </div>`;
@@ -1068,12 +1099,6 @@
     const id = b.dataset.id, act = b.dataset.act;
     if (act === 'delete') {
       await authedFetch('/api/storage/'+id, { method:'DELETE' });
-    } else if (act === 'mount') {
-      const r = await authedFetch('/api/storage/'+id+'/mount', { method:'POST' });
-      const j = await r.json().catch(() => ({}));
-      toast(j.status || 'mount request sent', j.mount_error ? 'error' : 'success');
-    } else if (act === 'unmount') {
-      await authedFetch('/api/storage/'+id+'/unmount', { method:'POST' });
     }
     loadStorage(); loadBackends();
   }

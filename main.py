@@ -307,6 +307,12 @@ def mount_storage(cfg: StorageConfig) -> dict:
         raise ValueError("remote_name is required for non-local backends")
 
     mountpoint = CLOUD_MOUNT_ROOT / _slugify(f"{cfg.backend}_{cfg.remote_name}")
+    if os.path.ismount(str(mountpoint)):
+        # rclone mount --daemon forks and its launcher exits immediately, so the
+        # _mounts registry (which tracks the launcher Popen) can never see it
+        # "still running". Detect an already-attached FUSE fs directly and reuse
+        # it instead of stacking a second mount on top.
+        return {"status": "already-mounted", "mountpoint": str(mountpoint)}
     _force_unmount(mountpoint)
     mountpoint.mkdir(parents=True, exist_ok=True)
 
@@ -327,7 +333,7 @@ def mount_storage(cfg: StorageConfig) -> dict:
     log.info("starting rclone mount: %s -> %s", remote_spec, mountpoint)
     proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file)
     with _mounts_lock:
-        _mounts[cfg.id] = {"proc": proc, "mountpoint": mountpoint, "log": log_path}
+        _mounts[cfg.id] = {"proc": proc, "mountpoint": mountpoint, "log": log_path, "backend": cfg.backend, "label": cfg.label}
     time.sleep(0.5)
     return {"status": "mount-started", "mountpoint": str(mountpoint), "log": str(log_path)}
 
@@ -366,6 +372,183 @@ def remount_all(db: Session) -> None:
             log.error("remount failed for storage id=%s: %s", cfg.id, e)
 
 
+# ======================================================= library scan (async) ===
+
+_SCAN_STATE = {"running": False, "added": 0, "started_at": None, "finished_at": None, "error": None}
+_scan_lock = threading.Lock()
+
+
+def _scan_roots() -> list:
+    """Return (path, backend, label) for every scan target: the local books
+    root plus each live cloud mountpoint.
+
+    A mountpoint counts as live when the FUSE fs is actually attached
+    (os.path.ismount) -- NOT when the launcher process is alive, because
+    "rclone mount --daemon" forks into the background and its parent
+    Popen process exits immediately (leaving poll() non-None forever).
+    """
+    roots = [(BOOKS_ROOT, "local", "local")]
+    with _mounts_lock:
+        for m in _mounts.values():
+            mp = m.get("mountpoint")
+            if mp is not None and os.path.ismount(str(mp)):
+                roots.append((str(mp), m.get("backend", "cloud"), m.get("label", "cloud")))
+    return roots
+
+
+def _wait_for_mount_readiness(timeout: float = 120.0) -> None:
+    """Block until every live cloud mount is attached AND listable.
+
+    rclone mount needs real time after launch to refresh OAuth tokens and do
+    its first listing; a cold start can take 30-60s on Google Drive before
+    the mountpoint answers. Scanning before that reads an empty/unattached
+    directory and indexes nothing (empty library after a successful mount).
+    Returns no later than timeout seconds."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with _mounts_lock:
+            mps = [m.get("mountpoint") for m in _mounts.values() if m.get("mountpoint")]
+        if not mps:
+            return
+        ready = True
+        for mp in mps:
+            try:
+                if not os.path.ismount(str(mp)):
+                    ready = False
+                    break
+                os.listdir(str(mp))  # raises OSError until the fs answers
+            except OSError:
+                ready = False
+                break
+        if ready:
+            return
+        time.sleep(0.5)
+
+
+def _scan_author_title(p: Path) -> tuple:
+    """Derive author/title from the filename. Books named 'Title - Author.ext'
+    split on the LAST ' - '; the tail is the author, the head is the title."""
+    stem = p.stem
+    if " - " in stem:
+        title, _, author = stem.rpartition(" - ")
+        title, author = title.strip(), author.strip()
+        if title and author and len(author) <= 80:
+            return title, author
+    return stem.strip(), "Unknown Author"
+
+
+def _scan_library() -> int:
+    """Walk every scan root and index any e-book file not yet in the DB.
+
+    The KOReader partialMD5 hash is NOT computed here. For a cloud backend
+    that means up to 12 content reads per file over FUSE/network -- hashing a
+    ~30k-book Google Drive in one pass takes hours and leaves the library
+    empty for the whole time. Instead books are indexed by metadata only and
+    the hash is resolved lazily on first kosync match (see
+    `_lazy_koreader_hash`). Books are committed incrementally so they appear
+    in the UI while a long scan is still running.
+    """
+    added = 0
+    _wait_for_mount_readiness()
+    with SessionLocal() as db:
+        existing = {b.storage_path for b in db.query(Book).all()}
+        batch = []
+        for root, backend, label in _scan_roots():
+            rp = Path(root)
+            if not rp.exists():
+                continue
+            for p in rp.rglob("*"):
+                try:
+                    if not p.is_file():
+                        continue
+                except OSError:
+                    continue
+                ext = p.suffix.lstrip(".").lower()
+                if ext not in _EBOOK_EXTENSIONS:
+                    continue
+                sp = str(p)
+                if sp in existing:
+                    continue
+                title, author = _scan_author_title(p)
+                try:
+                    size = p.stat().st_size
+                except OSError:
+                    size = None
+                batch.append(Book(
+                    title=title, author=author, storage_path=sp,
+                    storage_backend=label, file_size=size, koreader_hash=None,
+                ))
+                existing.add(sp)
+                if len(batch) >= 50:
+                    db.add_all(batch)
+                    db.commit()
+                    added += len(batch)
+                    batch = []
+        if batch:
+            db.add_all(batch)
+            db.commit()
+            added += len(batch)
+    return added
+
+
+_MD5_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _lazy_koreader_hash(db: Session, book: Book) -> Optional[str]:
+    """Compute + cache a book's KOReader partialMD5 on first need.
+
+    The scan intentionally leaves koreader_hash NULL (hashing every cloud
+    file up front is far too slow). Resolve it the first time a kosync
+    document needs hash-matching, then persist so later matches are free.
+    """
+    if book.koreader_hash:
+        return book.koreader_hash
+    try:
+        from koreader_hash import partial_md5 as _partial_md5
+        kh = _partial_md5(book.storage_path)
+    except Exception:
+        return None
+    book.koreader_hash = kh
+    db.commit()
+    return kh
+
+
+def start_library_scan() -> None:
+    """Kick off a background library scan if none is already running."""
+    with _scan_lock:
+        if _SCAN_STATE["running"]:
+            return
+        _SCAN_STATE.update(running=True, added=0, error=None,
+                           started_at=datetime.now(timezone.utc), finished_at=None)
+
+    def _run() -> None:
+        try:
+            added = _scan_library()
+            with _scan_lock:
+                _SCAN_STATE.update(running=False, added=added,
+                                   finished_at=datetime.now(timezone.utc))
+            log.info("library scan finished: %d new book(s)", added)
+        except Exception as e:  # noqa: BLE001
+            log.exception("library scan failed")
+            with _scan_lock:
+                _SCAN_STATE.update(running=False, error=str(e),
+                                   finished_at=datetime.now(timezone.utc))
+
+    threading.Thread(target=_run, daemon=True, name="library-scan").start()
+
+
+@app.get("/api/scan/status", dependencies=[Depends(require_ui_auth)])
+def api_scan_status() -> dict:
+    with _scan_lock:
+        return {
+            "running": _SCAN_STATE["running"],
+            "added": _SCAN_STATE["added"],
+            "started_at": _SCAN_STATE["started_at"].isoformat() if _SCAN_STATE["started_at"] else None,
+            "finished_at": _SCAN_STATE["finished_at"].isoformat() if _SCAN_STATE["finished_at"] else None,
+            "error": _SCAN_STATE["error"],
+        }
+
+
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
@@ -394,6 +577,7 @@ def _startup() -> None:
     def _worker():
         with SessionLocal() as db:
             remount_all(db)
+        start_library_scan()
     threading.Thread(target=_worker, daemon=True, name="remount-all").start()
     log.info("CodexServer up. BOOKS_ROOT=%s CLOUD_MOUNT_ROOT=%s", BOOKS_ROOT, CLOUD_MOUNT_ROOT)
 
@@ -861,6 +1045,7 @@ def api_select(sid: int, payload: SelectIn, db: Session = Depends(get_db)) -> di
     _ensure_rclone_config(db)
     try:
         m = mount_storage(s)
+        start_library_scan()
         return {"storage_id": sid, "remote_path": s.remote_path, "mount": m}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"remount failed: {e}")
@@ -1398,6 +1583,13 @@ def _dav_book_for_key(db: Session, key: str) -> Optional[Book]:
         title = re.sub(r"[^a-z0-9]+", "", (book.title or "").lower())
         if key in {stem, (book.koreader_hash or "").lower(), title}:
             return book
+    # No stem/title/hash match. KOReader addresses books by partialMD5, so if
+    # the key looks like one, resolve any missing hashes lazily and retry.
+    if _MD5_RE.match(key):
+        for book in db.query(Book).all():
+            kh = _lazy_koreader_hash(db, book)
+            if kh and kh.lower() == key:
+                return book
     return None
 
 

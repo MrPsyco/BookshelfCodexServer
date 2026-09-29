@@ -13,7 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         fuse3 \
         fuse \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && echo 'user_allow_other' >> /etc/fuse.conf
 
 # Tailwind standalone CLI (offline-friendly, no Node, no CDN at runtime).
 # Downloaded at build time so we don't bloat the repo with a 42 MB binary.
