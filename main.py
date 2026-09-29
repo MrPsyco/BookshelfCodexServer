@@ -1244,9 +1244,24 @@ async def webdav(request: Request, path: str = "", db: Session = Depends(get_db)
 # Spec: https://specs.opds.io/opds-1.2 (Atom + OPDS namespaces).
 #
 import html as _html_mod
-from email.utils import format_datetime as _rfc3339
+from email.utils import format_datetime as _http_date
 from datetime import timezone as _tz
 import uuid as _uuid
+
+
+def _rfc3339(dt) -> str:
+    """RFC 3339 / ISO 8601 UTC timestamp for Atom <updated>.
+
+    Atom (RFC 4287) requires RFC 3339 date-time, e.g. '2026-09-29T16:52:50Z'.
+    email.utils.format_datetime() emits RFC 2822 ('Sat, 26 Sep 2026 16:52:50
+    +0000'), which is the *HTTP-date* format used for Last-Modified. Mixing
+    the two made strict Atom parsers (Moon+ Reader) abort on the feed, so the
+    two formats are kept apart: _rfc3339() here, _http_date() for headers.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_tz.utc)
+    return dt.astimezone(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 import xml.etree.ElementTree as _ET  # still used by _epub_cover() to parse OPF
 
 
@@ -1324,25 +1339,25 @@ OPDS_FEED_OPEN = (
 OPDS_FEED_CLOSE = '</feed>\n'
 
 
-def _opds_root_feed() -> bytes:
+def _opds_root_feed(base_url: str = "") -> bytes:
     body = (
         OPDS_FEED_OPEN
         + '<id>urn:codexserver:opds:root</id>\n'
         + '<title>CodexServer Catalog</title>\n'
         + f'<updated>{_opds_iso(None)}</updated>\n'
         + '<link rel="self"'
-        + ' href="/opds"'
+        + f' href="{base_url}/opds"'
         + ' type="application/atom+xml; charset=utf-8; profile=opds-catalog"/>\n'
         # KOReader's OPDS plugin only follows `subsection` (not
         # `catalog`) as a navigation entry — see
         # plugins/opds.koplugin/opdsbrowser.lua::catalog_rel. Emit two
         # <link> elements so both KOReader and spec-strict clients work.
         + '<link rel="subsection"'
-        + ' href="/opds/books"'
+        + f' href="{base_url}/opds/books"'
         + ' type="application/atom+xml;profile=opds-catalog"'
         + ' title="All books"/>\n'
         + '<link rel="http://opds-spec.org/subsection"'
-        + ' href="/opds/books"'
+        + f' href="{base_url}/opds/books"'
         + ' type="application/atom+xml;profile=opds-catalog"'
         + ' title="All books"/>\n'
         + OPDS_FEED_CLOSE
@@ -1350,7 +1365,7 @@ def _opds_root_feed() -> bytes:
     return (OPDS_XML_DECL + body).encode("utf-8")
 
 
-def _opds_books_feed(books: list) -> bytes:
+def _opds_books_feed(books: list, base_url: str = "") -> bytes:
     parts = [
         OPDS_XML_DECL,
         OPDS_FEED_OPEN,
@@ -1358,7 +1373,7 @@ def _opds_books_feed(books: list) -> bytes:
         '<title>CodexServer Books</title>\n',
         f'<updated>{_opds_iso(None)}</updated>\n',
         '<link rel="self"'
-        ' href="/opds/books"'
+        f' href="{base_url}/opds/books"'
         ' type="application/atom+xml; charset=utf-8; profile=opds-catalog"/>\n',
     ]
     for b in books:
@@ -1381,14 +1396,14 @@ def _opds_books_feed(books: list) -> bytes:
         mime = _opds_mime_for_book(b)
         parts.append(
             '  <link rel="http://opds-spec.org/acquisition"'
-            f' href="/opds/download/{b.id}"'
+            f' href="{base_url}/opds/download/{b.id}"'
             f' type="{mime}"'
             f' title="{title}"/>\n'
         )
         # Thumbnail: optional, KOReader falls back gracefully on 404.
         parts.append(
             '  <link rel="http://opds-spec.org/image/thumbnail"'
-            f' href="/opds/cover/{b.id}"'
+            f' href="{base_url}/opds/cover/{b.id}"'
             ' type="image/jpeg"/>\n'
         )
         parts.append('</entry>\n')
@@ -1522,7 +1537,7 @@ OPDS_CONTENT_TYPE = "application/atom+xml; charset=utf-8; profile=opds-catalog"
 # ---------------------------------------------------------- /opds root
 @app.get("/opds", response_class=Response)
 @app.head("/opds", response_class=Response)
-def opds_root(user: User = Depends(_require_opds_auth), db: Session = Depends(get_db)) -> Response:
+def opds_root(request: Request, user: User = Depends(_require_opds_auth), db: Session = Depends(get_db)) -> Response:
     """OPDS 1.2 catalog root: returns ALL books directly as an acquisition
     feed.
 
@@ -1544,9 +1559,9 @@ def opds_root(user: User = Depends(_require_opds_auth), db: Session = Depends(ge
     last_mod = max((b.added_at for b in rows if b.added_at is not None), default=None)
     headers = {"Cache-Control": "public, max-age=60"}
     if last_mod is not None:
-        headers["Last-Modified"] = _rfc3339(last_mod.astimezone(_tz.utc))
+        headers["Last-Modified"] = _http_date(last_mod.astimezone(_tz.utc))
     return Response(
-        content=_opds_books_feed(rows),
+        content=_opds_books_feed(rows, base_url=str(request.base_url).rstrip("/")),
         media_type=OPDS_CONTENT_TYPE,
         headers=headers,
     )
@@ -1555,15 +1570,15 @@ def opds_root(user: User = Depends(_require_opds_auth), db: Session = Depends(ge
 # ------------------------------------------------------------ /opds/books
 @app.get("/opds/books", response_class=Response)
 @app.head("/opds/books", response_class=Response)
-def opds_books(user: User = Depends(_require_opds_auth), db: Session = Depends(get_db)) -> Response:
+def opds_books(request: Request, user: User = Depends(_require_opds_auth), db: Session = Depends(get_db)) -> Response:
     """OPDS 1.2 acquisition feed: every book in the catalog."""
     rows = db.query(Book).order_by(Book.added_at.desc()).all()
     last_mod = max((b.added_at for b in rows if b.added_at is not None), default=None)
     headers = {"Cache-Control": "public, max-age=60"}
     if last_mod is not None:
-        headers["Last-Modified"] = _rfc3339(last_mod.astimezone(_tz.utc))
+        headers["Last-Modified"] = _http_date(last_mod.astimezone(_tz.utc))
     return Response(
-        content=_opds_books_feed(rows),
+        content=_opds_books_feed(rows, base_url=str(request.base_url).rstrip("/")),
         media_type=OPDS_CONTENT_TYPE,
         headers=headers,
     )

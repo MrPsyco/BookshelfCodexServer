@@ -222,6 +222,7 @@
         <button data-view="library"  class="nav-btn px-3 py-1.5 rounded-md hover:bg-slate-800">Library</button>
         <button data-view="upload"   class="nav-btn px-3 py-1.5 rounded-md hover:bg-slate-800">Upload</button>
         <button data-view="settings" class="nav-btn px-3 py-1.5 rounded-md hover:bg-slate-800">Settings</button>
+        <button data-view="setup"    class="nav-btn px-3 py-1.5 rounded-md hover:bg-slate-800">Setup & Connect</button>
         <span class="ml-3 flex items-center gap-2 text-xs text-slate-500">
           <span id="health-dot" class="inline-block w-2 h-2 rounded-full bg-slate-600 pulse-dot"></span>
           <span id="health-text">connecting…</span>
@@ -340,6 +341,132 @@
           </p>
           <div id="kosync-list" class="space-y-1 text-sm"></div>
         </div>
+      </div>
+    </section>
+
+    <section id="view-setup" class="view hidden">
+      <h2 class="text-lg font-semibold tracking-tight mb-1">Setup & Connect</h2>
+      <p class="text-xs text-slate-500 mb-5">
+        Schritt-für-Schritt-Anleitung, um deine E-Reader mit CodexServer zu
+        verbinden. Die URL unten ist automatisch auf deinen Server zugeschnitten.
+      </p>
+
+      <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5 mb-6">
+        <h3 class="font-medium mb-2">Deine Server-URL & Zugangsdaten</h3>
+        <p class="text-xs text-slate-500 mb-2">
+          Die Basis-URL wird automatisch aus der aktuellen Browser-Adresse
+          ermittelt. Trag unten den Usernamen + Passwort eines KOReader-Users
+          ein (Tab „Settings" → KOReader Users) — die Client-URLs weiter unten
+          werden daraus live erzeugt.
+        </p>
+        <div class="grid sm:grid-cols-3 gap-2">
+          <div>
+            <label class="text-[11px] text-slate-500">Server-URL</label>
+            <input id="cx-setup-base-url" class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm font-mono" />
+          </div>
+          <div>
+            <label class="text-[11px] text-slate-500">Username</label>
+            <input id="cx-setup-user" class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm font-mono" autocomplete="off" />
+          </div>
+          <div>
+            <label class="text-[11px] text-slate-500">Passwort</label>
+            <input id="cx-setup-pass" type="password" class="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-sm font-mono" autocomplete="off" />
+          </div>
+        </div>
+        <p class="text-[11px] text-slate-500 mt-2">
+          Diese Zugangsdaten landen nirgends — sie werden nur im Browser zu den
+          URL-Strings zusammengesetzt, damit du sie bequem kopieren kannst.
+        </p>
+      </div>
+
+      <div class="grid lg:grid-cols-2 gap-6">
+        <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
+          <h3 class="font-medium mb-1">Moon+ Reader</h3>
+          <p class="text-xs text-slate-500 mb-3">
+            OPDS-Katalog („Netz-Bibliothek") für den Buchbestand und WebDAV
+            für die Sync-Dateien.
+          </p>
+
+          <h4 class="text-sm font-semibold mt-3 mb-1">1 · OPDS-Katalog hinzufügen</h4>
+          <ol class="list-decimal pl-5 text-sm text-slate-300 space-y-1">
+            <li>Moon+ Reader → Menü → <em>Netz-Bibliothek</em> → <em>+</em> (neuer Katalog).</li>
+            <li>Name frei wählen, z. B. <code>CodexServer</code>.</li>
+            <li>URL eintragen (Basic Auth ist in der URL codiert):
+              <div class="mt-1 flex gap-2">
+                <input id="setup-moon-opds" readonly class="flex-1 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono" />
+                <button data-copy="setup-moon-opds" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs">Copy</button>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-1">
+                Format: <code>http://username:passwort@host:port/opds</code>.
+                Ersetze <code>username</code> und <code>passwort</code> durch die
+                Zugangsdaten eines KOReader-Users (Tab „Settings" → KOReader Users).
+              </p>
+            </li>
+            <li>Speichern und öffnen — die Bibliothek listet alle Bücher.</li>
+          </ol>
+
+          <h4 class="text-sm font-semibold mt-4 mb-1">2 · WebDAV-Sync einrichten</h4>
+          <ol class="list-decimal pl-5 text-sm text-slate-300 space-y-1">
+            <li>Moon+ Reader → <em>Einstellungen</em> → <em>Sync</em> → <em>WebDAV-Synchronisierung</em>.</li>
+            <li>
+              Server-URL:
+              <div class="mt-1 flex gap-2">
+                <input id="setup-moon-dav" readonly class="flex-1 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono" />
+                <button data-copy="setup-moon-dav" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs">Copy</button>
+              </div>
+            </li>
+            <li>Benutzername + Passwort: dieselben wie beim OPDS-Katalog.</li>
+            <li>Sync-Richtung: <em>Bilateral</em> (empfohlen) — Positionen werden
+              bidirektional gemergt.</li>
+            <li>Im Buch: Lesezeichen/Position werden bei jedem Schließen automatisch hochgeladen.</li>
+          </ol>
+        </div>
+
+        <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
+          <h3 class="font-medium mb-1">KOReader</h3>
+          <p class="text-xs text-slate-500 mb-3">
+            OPDS-Katalog für Downloads und KOSync (Custom Sync Server) für den
+            Lesefortschritt.
+          </p>
+
+          <h4 class="text-sm font-semibold mt-3 mb-1">1 · OPDS-Katalog hinzufügen</h4>
+          <ol class="list-decimal pl-5 text-sm text-slate-300 space-y-1">
+            <li>KOReader → Hauptmenü (☰) → <em>OPDS-Browser</em> → <em>+</em>.</li>
+            <li>
+              URL:
+              <div class="mt-1 flex gap-2">
+                <input id="setup-ko-opds" readonly class="flex-1 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono" />
+                <button data-copy="setup-ko-opds" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs">Copy</button>
+              </div>
+            </li>
+            <li>Benutzername + Passwort: KOReader-User aus dem Settings-Tab.</li>
+            <li>Speichern → Katalog öffnen → Bücher herunterladen.</li>
+          </ol>
+
+          <h4 class="text-sm font-semibold mt-4 mb-1">2 · KOSync einrichten</h4>
+          <ol class="list-decimal pl-5 text-sm text-slate-300 space-y-1">
+            <li>KOReader → ☰ → <em>Fortschrittssynchronisation</em> (Progress sync).</li>
+            <li>Dort auf <em>Custom sync server</em> umschalten.</li>
+            <li>
+              Server-URL:
+              <div class="mt-1 flex gap-2">
+                <input id="setup-ko-sync" readonly class="flex-1 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono" />
+                <button data-copy="setup-ko-sync" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs">Copy</button>
+              </div>
+            </li>
+            <li>Username + Passwort: derselbe KOReader-User.</li>
+            <li><em>Test</em> drücken — Server sollte „success" melden.</li>
+            <li>Im Buch liest KOReader die Position beim Schließen automatisch hoch
+              (nicht pro Seitenwechsel). Im Web-UI unter <em>Settings</em> →
+              <em>Sync Activity</em> taucht der Eintrag mit blauem KOReader-Badge auf.</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="mt-6 text-[11px] text-slate-500">
+        Hinweis: Zugangsdaten müssen <em>einmalig</em> pro Gerät vergeben werden.
+        Lege im Settings-Tab unter „KOReader Users" für jedes Gerät einen
+        eigenen User an — so bleiben die Fortschritte getrennt.
       </div>
     </section>
   </main>
@@ -515,6 +642,7 @@
     if (name === 'library')  loadLibrary();
     if (name === 'upload')   loadBackends();
     if (name === 'settings') { loadMetadata(); loadStorage(); loadKUsers(); }
+    if (name === 'setup')    { renderSetup(); }
   }
   $$('.nav-btn').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
 
@@ -1040,6 +1168,68 @@
   $('#kpw-copy').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText($('#kpw-value').textContent);
           toast('Copied', 'success'); } catch { toast('Clipboard blocked', 'error'); }
+  });
+
+  // ================================================= setup tab ==========
+  function setupBase() {
+    return ($('#cx-setup-base-url').value || window.location.origin).replace(/\/+$/, '');
+  }
+  function setupCreds() {
+    const u = ($('#cx-setup-user').value || '').trim();
+    const p = $('#cx-setup-pass').value || '';
+    if (!u && !p) return null;           // no creds yet
+    const eu = encodeURIComponent(u);
+    const ep = encodeURIComponent(p);
+    return { u, eu, ep, auth: eu + ':' + ep };  // Basic Auth (RFC 7617: user:pass)
+  }
+
+  function updateSetupURLs() {
+    const base = setupBase();          // http://host:port
+    const c = setupCreds();            // null | {eu, ep}
+    const scheme = base.split('://')[0];
+    const host   = base.split('://')[1];
+    // Basic Auth in URL: http://user:pass@host:port
+    const authUrl = c ? `${scheme}://${c.eu}:${c.ep}@${host}` : base;
+
+    // Moon+ Reader: its catalog URL field accepts user:pass@host inline.
+    $('#setup-moon-opds').value = `${authUrl}/opds`;
+    // Moon+ Reader WebDAV: separate user/pass fields — give plain base + path.
+    $('#setup-moon-dav').value  = `${base}/dav`;
+
+    // KOReader: OPDS dialog has its own user/pass fields — plain URL.
+    $('#setup-ko-opds').value   = `${base}/opds`;
+    // KOReader custom sync server: plain base URL (separate creds dialog).
+    $('#setup-ko-sync').value   = base;
+  }
+
+  // Called when switching to the setup tab AND on every input change.
+  function renderSetup() {
+    if (!$('#cx-setup-base-url').value) {
+      $('#cx-setup-base-url').value = window.location.origin;
+    }
+    (async () => {
+      try {
+        const r = await fetch('/api/auth/me', { credentials: 'include' });
+        if (r.ok) {
+          const j = await r.json();
+          if (j.username && !$('#cx-setup-user').value) $('#cx-setup-user').value = j.username;
+        }
+      } catch {}
+    })();
+    updateSetupURLs();
+  }
+
+  ['cx-setup-base-url', 'cx-setup-user', 'cx-setup-pass'].forEach(id => {
+    $('#' + id).addEventListener('input', updateSetupURLs);
+  });
+
+  $$('[data-copy]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const inp = $('#' + btn.dataset.copy);
+      if (!inp) return;
+      try { await navigator.clipboard.writeText(inp.value); toast('Copied', 'success'); }
+      catch { toast('Clipboard blocked', 'error'); }
+    });
   });
 
   // =========================================== boot ===================
