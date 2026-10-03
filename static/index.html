@@ -252,10 +252,40 @@
           <button id="lib-refresh" class="text-xs text-slate-400 hover:text-slate-200">refresh</button>
         </div>
       </div>
-      <div id="library-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4"></div>
-      <div id="library-empty" class="hidden text-center py-24 text-slate-500">
-        <p class="text-lg">No books yet.</p>
-        <p class="text-sm mt-1">Drop an <code>.epub</code> on the Upload tab to get started.</p>
+
+      <!-- Continue reading (Netflix-style row) -->
+      <div id="continue-row" class="hidden mb-8">
+        <h3 class="text-sm font-semibold tracking-tight text-slate-300 mb-3">Continue reading</h3>
+        <div id="continue-scroll" class="flex gap-3 overflow-x-auto pb-2"></div>
+      </div>
+
+      <div class="flex flex-col lg:flex-row gap-6">
+        <!-- Author sidebar -->
+        <aside class="lg:w-56 shrink-0">
+          <div class="lg:sticky lg:top-20 max-h-[70vh] overflow-y-auto rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+            <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 px-1">Authors <span id="author-count" class="font-normal normal-case text-slate-500"></span></div>
+            <div id="author-list" class="space-y-0.5"></div>
+          </div>
+        </aside>
+
+        <!-- Main grid -->
+        <div class="flex-1 min-w-0">
+          <div class="flex flex-wrap items-center gap-2 mb-4">
+            <input id="lib-search" type="text" placeholder="Search title or author…" class="flex-1 min-w-[180px] bg-slate-950 border border-slate-800 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
+            <select id="lib-sort" class="bg-slate-950 border border-slate-800 rounded-md px-2 py-2 text-sm">
+              <option value="author">Author A–Z</option>
+              <option value="title">Title A–Z</option>
+              <option value="added:desc">Newest first</option>
+              <option value="progress:desc">Most read</option>
+            </select>
+          </div>
+          <div id="library-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 gap-4"></div>
+          <div id="library-empty" class="hidden text-center py-24 text-slate-500">
+            <p class="text-lg">No books yet.</p>
+            <p class="text-sm mt-1">Drop an <code>.epub</code> on the Upload tab to get started.</p>
+          </div>
+          <div id="lib-sentinel" class="h-10 flex items-center justify-center text-xs text-slate-600 hidden">Loading…</div>
+        </div>
       </div>
     </section>
 
@@ -583,6 +613,8 @@
     await refreshMe();
     showView('library');
     await loadLibrary();
+    loadContinue();
+    loadAuthors();
   }
 
   async function refreshMe() {
@@ -615,14 +647,14 @@
     $$('.nav-btn').forEach(b => b.classList.remove('bg-slate-800'));
     const btn = $$('.nav-btn').find(b => b.dataset.view === name);
     if (btn) btn.classList.add('bg-slate-800');
-    if (name === 'library')  loadLibrary();
+    if (name === 'library')  { loadLibrary(); loadContinue(); loadAuthors(); }
     if (name === 'upload')   loadBackends();
     if (name === 'settings') { loadMetadata(); loadStorage(); loadKoreaderSync(); }
     if (name === 'setup')    { renderSetup(); }
   }
   $$('.nav-btn').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
 
-  $('#lib-refresh').addEventListener('click', loadLibrary);
+  $('#lib-refresh').addEventListener('click', () => { loadLibrary(); loadContinue(); loadAuthors(); });
 
   function coverSvg(title, author) {
     let h = 0; for (const c of (title||'?')) h = (h*31 + c.charCodeAt(0)) & 0xffff;
@@ -644,16 +676,94 @@
     </svg>`;
   }
 
-  async function loadLibrary() {
-    let books = [];
-    try { books = await (await authedFetch('/api/books')).json(); } catch { return; }
-    const grid = $('#library-grid'), empty = $('#library-empty');
-    $('#lib-count').textContent = books.length ? '(' + books.length + ')' : '';
-    if (books.length === 0) { grid.innerHTML=''; empty.classList.remove('hidden'); }
-    else { empty.classList.add('hidden'); renderLibraryGrid(books); }
+  // ===================== library state =====================
+  let _lib = { q: '', author: null, sort: 'author', order: 'asc', offset: 0, limit: 60, total: 0, items: [], loading: false, done: false };
+
+  async function loadLibrary(reset = true) {
+    if (reset) { _lib.offset = 0; _lib.items = []; _lib.done = false; $('#library-grid').innerHTML = ''; }
+    if (_lib.loading || _lib.done) return;
+    _lib.loading = true;
+    if (_lib.offset > 0) $('#lib-sentinel').classList.remove('hidden');
+    const params = new URLSearchParams({
+      sort: _lib.sort, order: _lib.order, limit: String(_lib.limit), offset: String(_lib.offset),
+    });
+    if (_lib.q) params.set('q', _lib.q);
+    if (_lib.author) params.set('author', _lib.author);
+    let data;
+    try { data = await (await authedFetch('/api/books?' + params.toString())).json(); }
+    catch { _lib.loading = false; return; }
+    _lib.total = data.total;
+    _lib.items = reset ? data.items : _lib.items.concat(data.items);
+    _lib.offset += data.items.length;
+    _lib.done = _lib.offset >= _lib.total;
+    _lib.loading = false;
+    $('#lib-sentinel').classList.add('hidden');
+    $('#lib-count').textContent = _lib.total ? '(' + _lib.total + ')' : '';
+    const empty = $('#library-empty');
+    if (_lib.items.length === 0) { empty.classList.remove('hidden'); }
+    else { empty.classList.add('hidden'); renderLibraryGrid(data.items, reset); }
     // Check for an active background scan and auto-refresh when it finishes.
     pollScan();
   }
+
+  function loadMore() {
+    if (!_lib.done && !_lib.loading) loadLibrary(false);
+  }
+
+  async function loadContinue() {
+    const row = $('#continue-row'), scroll = $('#continue-scroll');
+    let data;
+    try { data = await (await authedFetch('/api/books/continue?limit=20')).json(); } catch { return; }
+    const items = data.items || [];
+    if (!items.length) { row.classList.add('hidden'); return; }
+    row.classList.remove('hidden');
+    scroll.innerHTML = items.map(b => `
+      <a href="#" data-continue="${b.id}" class="continue-card shrink-0 w-24 flex flex-col gap-1 group">
+        <div class="relative aspect-[5/7] bg-slate-800 rounded-lg overflow-hidden">
+          ${coverSvg(b.title, b.author)}<img src="/api/cover/${b.id}" alt="" loading="lazy" class="absolute inset-0 w-full h-full object-cover" onerror="this.remove()">
+          <div class="absolute bottom-0 left-0 right-0 h-1 bg-slate-800">
+            <div class="h-full bg-indigo-500" style="width:${b.progress_pct||0}%"></div>
+          </div>
+        </div>
+        <div class="text-xs font-medium leading-snug line-clamp-2 group-hover:text-indigo-300">${esc(b.title)}</div>
+      </a>`).join('');
+  }
+
+  async function loadAuthors() {
+    let data;
+    try { data = await (await authedFetch('/api/books/authors')).json(); } catch { return; }
+    const list = $('#author-list');
+    $('#author-count').textContent = '(' + (data.total || 0) + ')';
+    const items = data.items || [];
+    list.innerHTML = items.map(a => `
+      <button data-author="${esc(a.author)}" class="author-btn w-full text-left text-xs px-2 py-1 rounded hover:bg-slate-800 ${_lib.author === a.author ? 'bg-slate-800 text-indigo-300' : 'text-slate-400'}">
+        <span class="truncate">${esc(a.author)}</span>
+        <span class="text-slate-600 float-right">${a.count}</span>
+      </button>`).join('');
+    $$('#author-list .author-btn').forEach(b => b.addEventListener('click', () => {
+      _lib.author = (b.dataset.author === _lib.author) ? null : b.dataset.author;
+      loadAuthors(); loadLibrary(true);
+    }));
+  }
+
+  document.getElementById('lib-sort').addEventListener('change', e => {
+    const v = e.target.value;
+    if (v.includes(':')) { [_lib.sort, _lib.order] = v.split(':'); }
+    else { _lib.sort = v; _lib.order = 'asc'; }
+    loadLibrary(true);
+  });
+
+  let _searchTimer = null;
+  document.getElementById('lib-search').addEventListener('input', e => {
+    clearTimeout(_searchTimer);
+    _searchTimer = setTimeout(() => { _lib.q = e.target.value.trim(); loadLibrary(true); }, 250);
+  });
+
+  // Infinite scroll: IntersectionObserver on the sentinel.
+  const _io = new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting) loadMore();
+  }, { rootMargin: '600px' });
+  _io.observe(document.getElementById('lib-sentinel'));
 
   async function pollScan() {
     const badge = $('#lib-scan');
@@ -674,14 +784,14 @@
         badge.classList.add('hidden');
         const n = st.added || 0;
         if (n > 0) toast('Scan fertig: ' + n + ' neue(s) Buch/Bücher', 'success');
-        loadLibrary();
+        loadLibrary(true); loadAuthors();
       }
     }, 2000);
   }
 
-  function renderLibraryGrid(books) {
+  function renderLibraryGrid(books, append) {
     const grid = $('#library-grid');
-    grid.innerHTML = books.map(b => {
+    const html = books.map(b => {
       const fmtBadge = b.format_ext
         ? `<span class="absolute top-2 left-2 text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-950/85 text-slate-100 ring-1 ring-slate-700" title="${esc(b.format)}">${esc(b.format_ext)}</span>`
         : '';
@@ -719,6 +829,8 @@
         </div>
       </article>`;
     }).join('');
+    if (append) { grid.insertAdjacentHTML('beforeend', html); }
+    else { grid.innerHTML = html; }
   }
 
   // ============================================= upload ===============
@@ -778,7 +890,7 @@
         });
         bar.style.width = '100%'; status.textContent = 'done'; status.className = 'status text-xs text-emerald-400';
         toast('Saved "' + j.title + '" by ' + j.author, 'success');
-        loadLibrary();
+        loadLibrary(); loadAuthors();
       } catch (e) {
         bar.classList.remove('bg-indigo-500'); bar.classList.add('bg-rose-500');
         status.textContent = 'failed'; status.className = 'status text-xs text-rose-400';
