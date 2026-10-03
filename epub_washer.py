@@ -504,6 +504,18 @@ _DNB_SRU = "https://services.dnb.de/sru/dnb"
 
 _MARC_NS = {"marc": "http://www.loc.gov/MARC21/slim"}
 
+# MARC21 control/non-sorting characters that DNB sometimes leaves in subfield
+# text (e.g. NSB/NSE \x88/\x89 used to bracket non-filing words, and \x98/\x9c
+# as default word/phrase delimiters). They show up as invisible-but-corrupting
+# bytes in titles like "\x98Die\x9c Direktorinnen vom Reichshof".
+
+
+def _marc_clean(s: str) -> str:
+    """Strip MARC21 control characters and collapse surrounding whitespace."""
+    # Remove the specific C0/C1 control bytes MARC uses for bracketing/delimiting.
+    cleaned = re.sub(r"[\x88\x89\x98\x9c\x1b]", "", s or "")
+    return _norm(cleaned)
+
 
 def _marc_field_value(record, tag: str, subfield: str) -> str:
     """Return the joined text of MARC subfield `subfield` for field `tag`."""
@@ -512,7 +524,7 @@ def _marc_field_value(record, tag: str, subfield: str) -> str:
         for sf in datafield.findall(f"marc:subfield[@code='{subfield}']", _MARC_NS):
             if sf.text:
                 vals.append(sf.text.strip())
-    return _norm(" ".join(vals))
+    return _marc_clean(" ".join(vals))
 
 
 def _provider_dnb(blob: bytes, config) -> tuple[str, str]:
