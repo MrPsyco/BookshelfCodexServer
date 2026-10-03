@@ -12,6 +12,15 @@
     .pulse-dot { animation: pulse 1.6s ease-in-out infinite; }
     @keyframes pulse { 0%,100% { opacity:.4 } 50% { opacity:1 } }
     pre { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, monospace; }
+    /* Continue-reading row: hard-cap cover images so a big cover can never
+       blow out the row. The <img> is constrained by height; width follows the
+       intrinsic aspect ratio (width:auto) and never exceeds the column. */
+    #continue-scroll .continue-card img {
+      max-height: 180px;
+      width: auto;
+      max-width: 100%;
+      height: auto;
+    }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-full">
@@ -248,7 +257,12 @@
       <div class="flex items-baseline justify-between mb-5">
         <h2 class="text-lg font-semibold tracking-tight">Library <span id="lib-count" class="text-slate-500 font-normal text-sm ml-2"></span></h2>
         <div class="flex items-center gap-3">
-          <span id="lib-scan" class="hidden text-xs text-indigo-300"></span>
+          <div id="lib-scan" class="hidden flex flex-col items-end gap-1.5 min-w-[13rem]">
+            <span id="lib-scan-label" class="text-xs text-indigo-300 whitespace-nowrap"></span>
+            <div class="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden ring-1 ring-slate-700/50">
+              <div id="lib-scan-bar" class="h-full bg-indigo-500 transition-all duration-700 ease-out" style="width:0%"></div>
+            </div>
+          </div>
           <button id="lib-refresh" class="text-xs text-slate-400 hover:text-slate-200">refresh</button>
         </div>
       </div>
@@ -259,9 +273,9 @@
         <div id="continue-scroll" class="flex gap-3 overflow-x-auto pb-2"></div>
       </div>
 
-      <div style="display:flex; gap:20px;">
+      <div style="display:flex; align-items:flex-start; gap:20px;">
         <!-- Author sidebar -->
-        <aside style="width:250px; flex-shrink:0; min-width:0;">
+        <aside style="flex:0 0 250px; min-width:0;">
           <div style="position:sticky; top:80px; max-height:70vh; overflow-y:auto; border-radius:12px; border:1px solid #1e293b; background:rgba(15,23,42,0.4); padding:12px;">
             <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 px-1">Authors <span id="author-count" class="font-normal normal-case text-slate-500"></span></div>
             <div id="author-status" class="hidden text-[11px] text-slate-500 px-1 mb-1.5"></div>
@@ -269,7 +283,7 @@
           </div>
         </aside>
         <!-- Main grid -->
-        <main style="flex-grow:1; min-width:0;">
+        <main style="flex:1; min-width:0;">
           <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:16px;">
             <input id="lib-search" type="text" placeholder="Search title or author..." style="flex:1 1 auto; min-width:180px; background:#020617; border:1px solid #1e293b; border-radius:6px; padding:8px 12px; font-size:14px; color:#e2e8f0;" />
             <select id="lib-sort" style="background:#020617; border:1px solid #1e293b; border-radius:6px; padding:8px; font-size:14px; color:#e2e8f0;">
@@ -513,6 +527,18 @@
   const $  = (s, r=document) => r.querySelector(s);
   const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
   const esc = s => (s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  // Loading/error helper for async list views. Renders a muted placeholder
+  // while a fetch is in flight and a visible error row instead of dying
+  // silently when the request fails or times out.
+  function setLoading(el, msgs) {
+    if (!el) return;
+    el.innerHTML = `<p class="text-xs text-slate-500 italic">${esc(msgs.loading || 'Lädt…')}</p>`;
+  }
+  function setLoadError(el, msgs, err) {
+    if (!el) return;
+    el.innerHTML = `<p class="text-xs text-rose-400">${esc(msgs.error || 'Laden fehlgeschlagen')}${err ? ' (' + esc(err.message || err) + ')' : ''}</p>`;
+  }
 
   function toast(msg, kind='info') {
     const colors = {info:'bg-slate-800 border-slate-700', success:'bg-emerald-900/80 border-emerald-700',
@@ -829,7 +855,7 @@
       return;
     }
     badge.classList.remove('hidden');
-    badge.textContent = _scanBadgeText(scan);
+    _updateScanBadge(scan);
     // Re-check every 2s; reload the shelf the moment the scan completes.
     const timer = setInterval(async () => {
       let st;
@@ -844,17 +870,34 @@
         if (n > 0) toast('Scan fertig: ' + n + ' neue(s) Buch/Bücher', 'success');
         loadLibrary(true); loadAuthors();
       } else {
-        badge.textContent = _scanBadgeText(st);
+        _updateScanBadge(st);
         renderAuthorStatus();
       }
     }, 2000);
   }
 
-  // X = verarbeitet (enriched), Y = gesamt. "(X/Y)" pending in brackets.
-  function _scanBadgeText(scan) {
-    if (scan.running) return 'Scanning… (' + (scan.added || 0) + ' gefunden)';
-    const x = scan.enriched || 0, y = scan.total || 0;
-    return 'Meta-Aufbereitung ' + x + '/' + y + ' (' + (scan.pending || 0) + ' ausstehend)';
+  // Paints a Plex-style label + progress bar from a /api/scan/status result.
+  function _updateScanBadge(scan) {
+    const label = $('#lib-scan-label');
+    const bar = $('#lib-scan-bar');
+    if (!label || !bar) return;
+    // Metadata enrichment is the long-running job users care about — show its
+    // progress FIRST. The initial file scan only matters while it's the sole
+    // activity (no enrichment yet), so it's the fallback branch.
+    if (scan.enrich_running) {
+      const x = scan.enriched || 0, y = scan.total || 0, pending = scan.pending || 0;
+      const pct = y > 0 ? Math.round((x / y) * 100) : 0;
+      label.textContent = 'Metadaten ' + x + '/' + y + ' · ' + pending + ' offen · ' + pct + '%';
+      bar.style.width = pct + '%';
+      bar.classList.remove('animate-pulse');
+      return;
+    }
+    if (scan.running) {
+      label.textContent = 'Scannend… ' + (scan.added || 0) + ' gefunden';
+      bar.style.width = '100%';
+      bar.classList.add('animate-pulse');
+      return;
+    }
   }
 
   function renderLibraryGrid(books, append) {
@@ -985,9 +1028,12 @@
   };
 
   async function loadMetadata() {
-    let list = [];
-    try { list = await (await authedFetch('/api/metadata')).json(); } catch { return; }
-    $('#metadata-list').innerHTML = list.map(m => {
+    const list = $('#metadata-list');
+    setLoading(list, { loading: 'Provider werden geladen…' });
+    let rows;
+    try { rows = await (await authedFetch('/api/metadata')).json(); }
+    catch (e) { setLoadError(list, { error: 'Provider konnten nicht geladen werden' }, e); return; }
+    list.innerHTML = rows.map(m => {
       const desc = PROVIDER_DESC[m.provider_name] || '';
       const noKey = ['internal_opf', 'open_library', 'dnb'].includes(m.provider_name);
       return `
@@ -1070,7 +1116,8 @@
 // =========================================== global metadata settings =====
   async function loadSettings() {
     let s;
-    try { s = await (await authedFetch('/api/settings')).json(); } catch { return; }
+    try { s = await (await authedFetch('/api/settings')).json(); }
+    catch (e) { showError($('#settings-error'), 'Settings konnten nicht geladen werden: ' + (e.message || e)); return; }
     $('#set-sanity').checked  = !!s.sanity_check;
     $('#set-delay').value     = (typeof s.api_delay_ms === 'number') ? s.api_delay_ms : 0;
     $('#set-covers').checked  = !!s.download_missing_covers;
@@ -1286,9 +1333,12 @@
   });
 
   async function loadStorage() {
-    let list = [];
-    try { list = await (await authedFetch('/api/storage')).json(); } catch { return; }
-    $('#storage-list').innerHTML = list.map(s => {
+    const list = $('#storage-list');
+    setLoading(list, { loading: 'Cloud-Speicher werden geladen…' });
+    let rows;
+    try { rows = await (await authedFetch('/api/storage')).json(); }
+    catch (e) { setLoadError(list, { error: 'Cloud-Speicher konnten nicht geladen werden' }, e); return; }
+    list.innerHTML = rows.map(s => {
       const authState = s.auth ? s.auth.state : 'idle';
       return `
       <div class="flex justify-between items-center rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
@@ -1316,14 +1366,17 @@
 
   // =========================================== KOReader sync activity ===
   async function loadKoreaderSync() {
-    let list = [];
-    try { list = await (await authedFetch('/api/progress')).json(); } catch { return; }
-    if (!list.length) {
+    const list = $('#kosync-list');
+    setLoading(list, { loading: 'Sync-Aktivität wird geladen…' });
+    let rows;
+    try { rows = await (await authedFetch('/api/progress')).json(); }
+    catch (e) { setLoadError(list, { error: 'Sync-Aktivität konnte nicht geladen werden' }, e); $('#kosync-summary').textContent = ''; return; }
+    if (!rows.length) {
       $('#kosync-list').innerHTML = '<p class="text-xs text-slate-500">No sync activity yet. Open a book in KOReader (kosync) or Moon+ Reader (WebDAV) to see the first reading position here.</p>';
       $('#kosync-summary').textContent = '';
       return;
     }
-    $('#kosync-summary').textContent = list.length + ' position' + (list.length===1?'':'s');
+    $('#kosync-summary').textContent = rows.length + ' position' + (rows.length===1?'':'s');
     const when = ts => {
       if (!ts) return '';
       try { return new Date(ts * 1000).toLocaleString(); } catch { return ''; }
@@ -1336,7 +1389,7 @@
       const [name, cls] = map[c] || [c, 'bg-slate-800 text-slate-300 ring-slate-600'];
       return `<span class="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ring-1 ${cls}">${esc(name)}</span>`;
     };
-    $('#kosync-list').innerHTML = list.map(p => {
+    $('#kosync-list').innerHTML = rows.map(p => {
       const label = p.title
         ? `<span class="text-sm font-medium text-slate-100">${esc(p.title)}</span><span class="text-[11px] text-slate-500 ml-2">${esc(p.author||'')}</span>`
         : `<span class="text-xs font-mono text-slate-400">unmatched:<span class="text-slate-500">${esc(String(p.document||'').substring(0,16))}…</span></span>`;
