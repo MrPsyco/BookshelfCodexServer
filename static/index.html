@@ -1200,9 +1200,6 @@
     try { list = await (await authedFetch('/api/storage')).json(); } catch { return; }
     $('#storage-list').innerHTML = list.map(s => {
       const authState = s.auth ? s.auth.state : 'idle';
-      const authBadge = authState === 'complete'
-        ? '<span class="text-emerald-400">● verbunden</span>'
-        : (authState === 'error' ? '<span class="text-rose-400">● fehler</span>' : '');
       return `
       <div class="flex justify-between items-center rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
         <div class="text-sm">
@@ -1210,7 +1207,6 @@
           <span class="text-slate-500"> · ${esc(s.backend)}</span>
           ${s.remote_path ? '<span class="text-slate-500"> · ' + esc(s.remote_path) + '</span>' : ''}
           <span class="ml-2 text-xs ${s.mounted?'text-emerald-400':'text-amber-400'}">${s.mounted?'● verbunden':'○ nicht verbunden'}</span>
-          ${authBadge ? '<span class="ml-2 text-xs">' + authBadge + '</span>' : ''}
         </div>
         <div class="flex gap-2 text-xs">
           <button data-act="delete" data-id="${s.id}" class="text-rose-400 hover:text-rose-300">delete</button>

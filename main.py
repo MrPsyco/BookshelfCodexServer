@@ -397,8 +397,8 @@ _scan_lock = threading.Lock()
 _ENRICH_STATE = {"running": False}
 _enrich_lock = threading.Lock()
 _ENRICH_POLL_SECONDS = 300.0
-_ENRICH_BATCH_SIZE = 200
-_ENRICH_WORKERS = 8
+_ENRICH_BATCH_SIZE = 500
+_ENRICH_WORKERS = 20
 _ENRICH_BATCH_TIMEOUT = 120.0
 
 

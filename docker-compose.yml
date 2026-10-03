@@ -2,6 +2,7 @@ services:
   codexserver:
     build: .
     container_name: codexserver
+    init: true
     restart: unless-stopped
     ports:
       - "8000:8000"
