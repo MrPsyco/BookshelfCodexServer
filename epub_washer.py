@@ -61,6 +61,12 @@ _COVER_URL: Optional[str] = None
 # api_delay_ms sleep between requests.
 _EXTERNAL_PROVIDERS = {"open_library", "dnb", "google_books"}
 
+# Cleaned (author, title) search hint parsed from the book's filename. Set by
+# enrich_from_path_providers (which has the storage path) and consumed by the
+# external providers as a fallback query when the OPF yields nothing usable
+# and before the raw-text `_first_text_snippet` last resort is tried.
+_FILENAME_HINT: tuple[str, str] = ("", "")
+
 
 def _api_delay_ms() -> int:
     try:
@@ -233,6 +239,8 @@ def enrich_from_path_providers(
     # Apply settings for the OPF fast-path sanity check as well (otherwise the
     # garbage filter would be skipped whenever internal_opf is enabled).
     _SETTINGS = dict(_SETTINGS)
+    global _FILENAME_HINT
+    _FILENAME_HINT = _filename_search_hint(path)
     if settings:
         for k, v in settings.items():
             _SETTINGS[k] = v
@@ -279,6 +287,13 @@ def _provider_google_books(blob: bytes, config) -> tuple[str, str]:
             t, a = _from_opf(zf)
     except zipfile.BadZipFile:
         t, a = "", ""
+
+    # Fill gaps from the cleaned filename hint before falling back to raw text.
+    hint_a, hint_t = _FILENAME_HINT
+    if not a:
+        a = hint_a
+    if not t:
+        t = hint_t
 
     query = t or _first_text_snippet(blob)
     if not query:
@@ -329,6 +344,55 @@ def _first_text_snippet(blob: bytes, limit: int = 200) -> str:
     except zipfile.BadZipFile:
         pass
     return ""
+
+
+def _filename_search_hint(path: str) -> tuple[str, str]:
+    """Build a cleaned (author, title) search hint out of a filename.
+
+    The filename is NEVER treated as the source of truth — the OPF is — but
+    when the OPF is empty, sending "Unknown Author" or raw book prose to the
+    external APIs (Open Library / DNB / Google) guarantees zero hits. A cleaned
+    hint ("Lastname, Firstname - Series - Title" -> ("Firstname Lastname",
+    "Title")) gives those APIs a query they can actually resolve.
+
+    Recognised conventions (from real filenames in this library):
+      "Lastname, Firstname - Series NN - Title"  -> ("First Last", "Title")
+      "Lastname, Firstname - Title"               -> ("First Last", "Title")
+      "Lastname, Firstname (note) Title"          -> ("First Last", "Title")
+      "Lastname, Firstname (note) - Title"        -> ("First Last", "Title")
+
+    Returns ("", "") when nothing matches, so the caller falls back to the old
+    behaviour instead of trusting a bad parse.
+    """
+    stem = os.path.splitext(os.path.basename(path))[0].strip()
+    if not stem:
+        return "", ""
+
+    # Drop parenthetical annotations ("HG", "(Michele, Rebecca)", "(3in1-Bundle)").
+    s = re.sub(r"\s*\([^)]*\)", "", stem).strip()
+    if not s:
+        return "", ""
+
+    author = ""
+    title = ""
+    if " - " in s:
+        left, right = s.split(" - ", 1)
+        m = re.match(r"^([^,]+),\s*(.+)$", left.strip())
+        if m:
+            author = f"{m.group(2).strip()} {m.group(1).strip()}".strip()
+        # right may carry "Series NN - Title"; keep the tail after the last " - ".
+        title = right.rsplit(" - ", 1)[-1].strip()
+    else:
+        m = re.match(r"^([^,]+),\s*([^,]+?)\s+(\S.*)$", s)
+        if m:
+            author = f"{m.group(2).strip()} {m.group(1).strip()}".strip()
+            title = m.group(3).strip()
+
+    author = _norm(author)
+    title = re.sub(r"^[.\-_–—:;]+", "", (_norm(title) or "")).strip()
+    if not author or not title:
+        return "", ""
+    return author, title
 
 
 # ---- Provider 3: Ollama (local LLM via /api/generate) -------------------------
@@ -390,6 +454,13 @@ def _provider_open_library(blob: bytes, config) -> tuple[str, str]:
             t, a = _from_opf(zf)
     except zipfile.BadZipFile:
         t, a = "", ""
+
+    # Fill gaps from the cleaned filename hint before falling back to raw text.
+    hint_a, hint_t = _FILENAME_HINT
+    if not a:
+        a = hint_a
+    if not t:
+        t = hint_t
 
     title_q = t or _first_text_snippet(blob)
     author_q = a or ""
@@ -453,6 +524,13 @@ def _provider_dnb(blob: bytes, config) -> tuple[str, str]:
             t, a = _from_opf(zf)
     except zipfile.BadZipFile:
         t, a = "", ""
+
+    # Fill gaps from the cleaned filename hint before falling back to raw text.
+    hint_a, hint_t = _FILENAME_HINT
+    if not a:
+        a = hint_a
+    if not t:
+        t = hint_t
 
     author = a or ""
     title = t or _first_text_snippet(blob)
