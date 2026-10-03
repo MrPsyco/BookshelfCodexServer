@@ -54,7 +54,7 @@ from sqlalchemy import or_, func, desc, asc
 
 import epub_washer
 from database import get_db, init_db, SessionLocal
-from models import Book, ClientProgress, KosyncProgress, MetadataConfig, Progress, StorageConfig, User, WebSession
+from models import Book, ClientProgress, KosyncProgress, MetadataConfig, Progress, StorageConfig, User, WebSession, AppSetting
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("codexserver")
@@ -585,6 +585,77 @@ def _needs_enrichment(db: Session, limit: int) -> list[Book]:
     )
 
 
+# ---- app_settings helpers -------------------------------------------------
+# Global key/value settings surface via GET/PUT /api/settings and are applied
+# by the enrichment worker on every batch. See models.AppSetting / DEFAULT_SETTINGS.
+
+_SETTING_KEYS = ("sanity_check", "api_delay_ms", "download_missing_covers", "language_bias")
+
+
+def _get_settings(db: Session) -> dict:
+    """Read the four enrichment settings from app_settings, returning typed
+    values (bool/int/str) with defaults for any missing key."""
+    from models import DEFAULT_SETTINGS
+    rows = {s.key: s.value for s in db.query(AppSetting).all()}
+    defaults = dict(DEFAULT_SETTINGS)
+
+    def _bool(k: str) -> bool:
+        v = rows.get(k, defaults.get(k, "false"))
+        if isinstance(v, str):
+            return v.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(v)
+
+    def _int(k: str) -> int:
+        v = rows.get(k, defaults.get(k, "0"))
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            try:
+                return int(defaults.get(k, "0"))
+            except (TypeError, ValueError):
+                return 0
+
+    return {
+        "sanity_check": _bool("sanity_check"),
+        "api_delay_ms": _int("api_delay_ms"),
+        "download_missing_covers": _bool("download_missing_covers"),
+        "language_bias": str(rows.get("language_bias", defaults.get("language_bias", ""))),
+    }
+
+
+def _get_settings_raw(db: Session) -> dict:
+    """Raw string settings as the worker hands to epub_washer (values as stored)."""
+    rows = {s.key: s.value for s in db.query(AppSetting).all()}
+    return {k: (rows.get(k) if k in rows else v) for k, v in (("sanity_check", "true"), ("api_delay_ms", "250"), ("download_missing_covers", "false"), ("language_bias", "de-DE"))}
+
+
+def _put_settings(db: Session, payload: dict) -> dict:
+    """Persist the four settings; unknown keys ignored. Returns typed settings."""
+    allowed = {
+        "sanity_check": "sanity_check",
+        "api_delay_ms": "api_delay_ms",
+        "download_missing_covers": "download_missing_covers",
+        "language_bias": "language_bias",
+    }
+    updated = {}
+    for field, key in allowed.items():
+        if field not in payload:
+            continue
+        val = payload[field]
+        if isinstance(val, bool):
+            val = "true" if val else "false"
+        elif not isinstance(val, str):
+            val = str(val)
+        row = db.query(AppSetting).filter(AppSetting.key == key).first()
+        if row is None:
+            db.add(AppSetting(key=key, value=val))
+        else:
+            row.value = val
+        updated[key] = val
+    db.commit()
+    return _get_settings(db)
+
+
 def _enrich_metadata_worker() -> None:
     """Fill real title/author from each book's own OPF, continuously.
 
@@ -636,10 +707,22 @@ def _enrich_metadata_worker() -> None:
                     time.sleep(_ENRICH_POLL_SECONDS)
                     continue
 
+                # Load the global settings fresh on EVERY batch too (same
+                # freshness guarantee as providers): toggling a setting in the
+                # WebUI applies to the next batch with no restart.
+                settings_raw = _get_settings_raw(db)
+
                 def _extract(book: Book) -> tuple[str, str]:
                     try:
+                        # Edge case: an EPUB already has a cached cover from a
+                        # previous pass; the worker only *downloads* covers when
+                        # the setting is on AND no cover is cached yet (the
+                        # _download_cover helper skips existing cache entries).
                         t, a = epub_washer.enrich_from_path_providers(
-                            book.storage_path, active_providers
+                            book.storage_path, active_providers,
+                            settings=settings_raw,
+                            cover_cache_dir=str(COVER_CACHE_DIR),
+                            book_id=book.id,
                         )
                     except Exception as e:  # noqa: BLE001
                         log.warning("enrich %s failed: %s", book.id, e)
@@ -1526,6 +1609,37 @@ def delete_metadata(mid: int, db: Session = Depends(get_db)) -> dict:
     db.delete(m)
     db.commit()
     return {"deleted": mid}
+
+
+# ============================================================== settings ===
+
+class SettingsIn(BaseModel):
+    sanity_check: Optional[bool] = None
+    api_delay_ms: Optional[int] = None
+    download_missing_covers: Optional[bool] = None
+    language_bias: Optional[str] = None
+
+
+@app.get("/api/settings", dependencies=[Depends(require_ui_auth)])
+def get_settings(db: Session = Depends(get_db)) -> dict:
+    """Current enrichment settings as typed JSON.
+
+    Shape: {sanity_check: bool, api_delay_ms: int, download_missing_covers: bool,
+    language_bias: str}. Read from app_settings, seeded with defaults by init_db.
+    """
+    return _get_settings(db)
+
+
+@app.put("/api/settings", dependencies=[Depends(require_ui_auth)])
+def put_settings(payload: SettingsIn, db: Session = Depends(get_db)) -> dict:
+    """Update the enrichment settings; accepts the same 4 fields GET returns.
+
+    Only supplied fields are changed (None left entirely; a field may only be
+    cleared by explicitly sending its empty value). Returns the full resulting
+    typed settings so the UI can echo state back.
+    """
+    data = payload.model_dump(exclude_unset=True)
+    return _put_settings(db, data)
 
 
 # ============================================================ kosync v1 sync

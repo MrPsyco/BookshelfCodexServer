@@ -145,8 +145,32 @@ class MetadataConfig(Base):
     __tablename__ = "metadata_configs"
 
     id = Column(Integer, primary_key=True, index=True)
-    provider_name = Column(String(60), nullable=False, index=True)  # internal_opf | google_books | ollama | openai
+    provider_name = Column(String(60), nullable=False, index=True)  # internal_opf | google_books | ollama | openai | open_library | dnb
     is_active = Column(Boolean, default=True, nullable=False)
     priority = Column(Integer, nullable=False, default=100)
     api_key_or_url = Column(String(1000), nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class AppSetting(Base):
+    """Global key/value settings for the enrichment pipeline.
+
+    Values are stored as TEXT (SQLite has no native bool/int). Keys:
+      sanity_check            ('true'/'false') reject garbage provider results
+      api_delay_ms            int string, sleep between external HTTP calls
+      download_missing_covers ('true'/'false') fetch covers for coverless EPUBs
+      language_bias           e.g. 'de-DE', fed to google_books as langRestrict
+    """
+
+    __tablename__ = "app_settings"
+
+    key = Column(String(100), primary_key=True)
+    value = Column(String(1000), nullable=True)
+
+
+DEFAULT_SETTINGS = {
+    "sanity_check": "true",
+    "api_delay_ms": "250",
+    "download_missing_covers": "false",
+    "language_bias": "de-DE",
+}

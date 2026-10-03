@@ -89,7 +89,7 @@ def _ensure_columns() -> None:
 
 def init_db() -> None:
     """Create all tables, run idempotent migrations, seed defaults if empty."""
-    from models import MetadataConfig  # local import: avoids circular at import time
+    from models import MetadataConfig, AppSetting, DEFAULT_SETTINGS  # local import: avoids circular at import time
 
     # WAL lets readers and the single writer proceed concurrently instead of
     # blocking every read on a transaction under journal_mode=DELETE. It is a
@@ -124,3 +124,10 @@ def init_db() -> None:
                 ]
             )
             db.commit()
+
+        # Seed default app_settings rows for any key not already present.
+        existing_keys = {s.key for s in db.query(AppSetting).all()}
+        for key, value in DEFAULT_SETTINGS.items():
+            if key not in existing_keys:
+                db.add(AppSetting(key=key, value=value))
+        db.commit()
