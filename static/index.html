@@ -6,21 +6,154 @@
   <title>CodexServer</title>
   <link rel="stylesheet" href="/static/dist/tailwind.css" />
   <style>
-    body { font-feature-settings: "ss01","cv01"; }
-    .cover-shadow { box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 24px -8px rgba(0,0,0,0.6); }
-    .drop-active { outline: 2px dashed rgb(99 102 241); outline-offset: -8px; background: rgba(99,102,241,0.08); }
-    .pulse-dot { animation: pulse 1.6s ease-in-out infinite; }
-    @keyframes pulse { 0%,100% { opacity:.4 } 50% { opacity:1 } }
-    pre { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, monospace; }
-    /* Continue-reading row: hard-cap cover images so a big cover can never
-       blow out the row. The <img> is constrained by height; width follows the
-       intrinsic aspect ratio (width:auto) and never exceeds the column. */
+    /* ============ CodexServer · Plex-style theme ============ */
+    :root {
+      --nav-h: 64px;
+      --bg: #1a1d24;
+      --bg-deep: #14171d;
+      --surface: #20242e;
+      --surface-hi: #272c38;
+      --border: #2c313c;
+      --text: #e8eaed;
+      --muted: #9aa1ad;
+      --accent: #e5a00d;
+      --accent-strong: #f5b82e;
+      --accent-soft: rgba(229, 160, 13, 0.14);
+    }
+
+    html, body { height: 100%; }
+    body {
+      font-feature-settings: "ss01","cv01";
+      background: var(--bg);
+      color: var(--text);
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ---- surfaces: remap slate → anthracite ---- */
+    .bg-slate-950 { background-color: var(--bg-deep) !important; }
+    .bg-slate-900 { background-color: var(--surface) !important; }
+    .bg-slate-800 { background-color: var(--surface-hi) !important; }
+    .bg-slate-900\/70 { background-color: rgba(21,24,31,0.72) !important; }
+    .bg-slate-900\/40 { background-color: rgba(32,36,46,0.55) !important; }
+    .bg-slate-950\/85 { background-color: rgba(20,23,29,0.88) !important; }
+    .bg-slate-950\/60 { background-color: rgba(20,23,29,0.62) !important; }
+    .border-slate-800, .border-slate-700 { border-color: var(--border) !important; }
+
+    /* ---- accent: remap indigo → Plex orange ---- */
+    [class*="bg-indigo-500"], [class*="bg-indigo-600"] { background-color: var(--accent) !important; }
+    [class*="hover:bg-indigo-500"]:hover, [class*="hover:bg-indigo-600"]:hover { background-color: var(--accent-strong) !important; }
+    [class*="text-indigo-300"], [class*="text-indigo-400"] { color: var(--accent) !important; }
+    [class*="hover:text-indigo-300"]:hover, [class*="hover:text-indigo-400"]:hover { color: var(--accent-strong) !important; }
+    .group:hover [class*="group-hover:text-indigo-300"] { color: var(--accent-strong) !important; }
+    [class*="bg-indigo-900"] { background-color: var(--accent-soft) !important; }
+    [class*="text-indigo-200"] { color: var(--accent-strong) !important; }
+    [class*="ring-indigo-700"] { --tw-ring-color: rgba(229,160,13,0.5) !important; }
+    [class*="from-indigo-500"] { background-image: none !important; background-color: var(--accent) !important; }
+    .accent-indigo-500 { accent-color: var(--accent) !important; }
+
+    /* ---- header / nav ---- */
+    #app-header {
+      background: rgba(21, 24, 31, 0.92);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(10px);
+    }
+    .nav-btn.bg-slate-800 { background: var(--accent-soft) !important; color: var(--accent) !important; }
+    #nav-search input::placeholder { color: var(--muted); }
+    #nav-search input:focus { border-color: var(--accent) !important; }
+
+    /* ---- app shell layout ---- */
+    #app-main { height: calc(100vh - var(--nav-h)); overflow: hidden; }
+    .view { height: 100%; }
+    #view-upload, #view-settings, #view-setup { height: 100%; overflow-y: auto; padding: 24px; }
+    #view-library {
+      height: 100%;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      padding: 20px 24px;
+      gap: 16px;
+    }
+    #view-library .lib-toolbar { flex: 0 0 auto; }
+    #continue-row { flex: 0 0 auto; }
+    #view-library .lib-body {
+      flex: 1 1 0%;
+      min-height: 0;
+      display: flex;
+      align-items: flex-start;
+      gap: 20px;
+    }
+
+    /* ---- sidebar ---- */
+    .author-sidebar {
+      flex: 0 0 240px;
+      min-width: 0;
+      height: 100%;
+      overflow-y: auto;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .lib-content { flex: 1 1 0%; min-width: 0; height: 100%; overflow-y: auto; }
+
+    /* ---- continue reading (single horizontal row) ---- */
+    #continue-scroll { display: flex; overflow-x: auto; gap: 15px; padding-bottom: 8px; }
+    #continue-scroll .continue-card { flex: 0 0 auto; }
     #continue-scroll .continue-card img {
-      max-height: 180px;
+      max-height: 150px;
       width: auto;
       max-width: 100%;
       height: auto;
+      object-fit: cover;
     }
+
+    /* ---- book grid & cards ---- */
+    .library-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 20px;
+    }
+    .book-card {
+      border-radius: 6px;
+      transition: transform .15s ease, box-shadow .15s ease;
+    }
+    .book-card:hover { transform: translateY(-3px); }
+    .book-card .cover {
+      aspect-ratio: 2 / 3;
+      width: 100%;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .book-card .cover img { object-fit: cover; }
+    .book-card .title,
+    .book-card .author {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* ---- scrollbars ---- */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #333944; border-radius: 6px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3c424e; }
+
+    /* ---- misc ---- */
+    .cover-shadow { box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 24px -8px rgba(0,0,0,0.6); }
+    .drop-active { outline: 2px dashed var(--accent); outline-offset: -8px; background: var(--accent-soft); }
+    .pulse-dot { animation: pulse 1.6s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity:.4 } 50% { opacity:1 } }
+    pre { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, monospace; }
+
+    .spinner {
+      width: 15px; height: 15px; border-radius: 50%;
+      border: 2px solid var(--border); border-top-color: var(--accent);
+      animation: spin 0.7s linear infinite; display: inline-block;
+      vertical-align: -3px; margin-right: 7px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    input, select, button { font-family: inherit; }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-full">
@@ -227,34 +360,47 @@
   </div>
 
   <!-- =================== Header / Navigation ============================== -->
-  <header id="app-header" class="hidden border-b border-slate-800/80 bg-slate-900/70 backdrop-blur sticky top-0 z-30">
-    <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
-      <div class="flex items-center gap-3">
-        <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 via-fuchsia-500 to-rose-500 grid place-items-center font-black text-white">C</div>
-        <div>
-          <h1 class="text-base font-semibold leading-none">CodexServer</h1>
-          <p class="text-[11px] text-slate-500 mt-0.5">self-hosted · KOReader-sync · rclone-backed</p>
-        </div>
+  <header id="app-header" class="hidden sticky top-0 z-30">
+    <div id="nav-inner" class="flex items-center gap-4 px-5">
+      <!-- logo (left) -->
+      <button data-view="library" class="nav-btn flex items-center gap-2.5 shrink-0 hover:opacity-90">
+        <div class="w-8 h-8 rounded-md bg-gradient-to-br from-indigo-500 via-fuchsia-500 to-rose-500 grid place-items-center font-black text-white text-sm">C</div>
+        <span class="font-semibold text-[15px] tracking-tight leading-none">CodexServer</span>
+      </button>
+
+      <!-- search (center) -->
+      <div id="nav-search" class="flex-1 min-w-0 max-w-3xl mx-auto">
+        <input id="lib-search" type="search" placeholder="Search title or author…"
+               class="w-full rounded-md border border-slate-800 bg-slate-900/70 px-3.5 py-1.5 text-sm text-slate-100 outline-none"
+               style="border-color:#2c313c; background:rgba(21,24,31,0.9);" />
       </div>
-      <div class="flex items-center gap-2 text-sm">
-        <button data-view="library"  class="nav-btn px-3 py-1.5 rounded-md hover:bg-slate-800">Library</button>
-        <button data-view="upload"   class="nav-btn px-3 py-1.5 rounded-md hover:bg-slate-800">Upload</button>
-        <button data-view="settings" class="nav-btn px-3 py-1.5 rounded-md hover:bg-slate-800">Settings</button>
-        <button data-view="setup"    class="nav-btn px-3 py-1.5 rounded-md hover:bg-slate-800">Setup & Connect</button>
-        <span class="ml-3 flex items-center gap-2 text-xs text-slate-500">
+
+      <!-- status + user (right) -->
+      <div class="flex items-center gap-3 shrink-0">
+        <div class="flex items-center gap-1.5 text-sm">
+          <button data-view="library"  class="nav-btn px-2.5 py-1 rounded-md hover:bg-slate-800">Library</button>
+          <button data-view="upload"   class="nav-btn px-2.5 py-1 rounded-md hover:bg-slate-800">Upload</button>
+          <button data-view="settings" class="nav-btn px-2.5 py-1 rounded-md hover:bg-slate-800">Settings</button>
+          <button data-view="setup"    class="nav-btn px-2.5 py-1 rounded-md hover:bg-slate-800">Setup</button>
+        </div>
+        <span class="h-5 w-px bg-slate-800"></span>
+        <span class="flex items-center gap-1.5 text-xs text-slate-500">
           <span id="health-dot" class="inline-block w-2 h-2 rounded-full bg-slate-600 pulse-dot"></span>
           <span id="health-text">connecting…</span>
+          <span id="mount-badge" class="hidden ml-1 rounded-full bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300"></span>
         </span>
-        <span id="me-user" class="ml-2 text-xs text-slate-400"></span>
-        <button id="logout-btn" class="ml-1 text-xs text-slate-500 hover:text-slate-200" title="Sign out">logout</button>
+        <span class="flex items-center gap-1 text-xs text-slate-400">
+          <span id="me-user"></span>
+          <button id="logout-btn" class="text-slate-500 hover:text-slate-200" title="Sign out">logout</button>
+        </span>
       </div>
     </div>
   </header>
 
-  <main id="app-main" class="hidden max-w-7xl mx-auto px-6 py-8">
+  <main id="app-main" class="hidden">
 
     <section id="view-library" class="view">
-      <div class="flex items-baseline justify-between mb-5">
+      <div class="lib-toolbar flex items-baseline justify-between">
         <h2 class="text-lg font-semibold tracking-tight">Library <span id="lib-count" class="text-slate-500 font-normal text-sm ml-2"></span></h2>
         <div class="flex items-center gap-3">
           <div id="lib-scan" class="hidden flex flex-col items-end gap-1.5 min-w-[13rem]">
@@ -263,40 +409,35 @@
               <div id="lib-scan-bar" class="h-full bg-indigo-500 transition-all duration-700 ease-out" style="width:0%"></div>
             </div>
           </div>
+          <select id="lib-sort" style="background:#20242e; border:1px solid #2c313c; border-radius:6px; padding:6px 8px; font-size:13px; color:#e8eaed;">
+            <option value="author">Author A–Z</option>
+            <option value="title">Title A–Z</option>
+            <option value="added:desc">Newest first</option>
+            <option value="progress:desc">Most read</option>
+          </select>
           <button id="lib-refresh" class="text-xs text-slate-400 hover:text-slate-200">refresh</button>
         </div>
       </div>
 
-      <!-- Continue reading (Netflix-style row) -->
-      <div id="continue-row" class="hidden mb-8">
+      <!-- Continue reading (single horizontal row) -->
+      <div id="continue-row" class="hidden">
         <h3 class="text-sm font-semibold tracking-tight text-slate-300 mb-3">Continue reading</h3>
-        <div id="continue-scroll" class="flex gap-3 overflow-x-auto pb-2"></div>
+        <div id="continue-scroll"></div>
       </div>
 
-      <div style="display:flex; align-items:flex-start; gap:20px;">
+      <div class="lib-body">
         <!-- Author sidebar -->
-        <aside style="flex:0 0 250px; min-width:0;">
-          <div style="position:sticky; top:80px; max-height:70vh; overflow-y:auto; border-radius:12px; border:1px solid #1e293b; background:rgba(15,23,42,0.4); padding:12px;">
-            <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 px-1">Authors <span id="author-count" class="font-normal normal-case text-slate-500"></span></div>
-            <div id="author-status" class="hidden text-[11px] text-slate-500 px-1 mb-1.5"></div>
-            <div id="author-list" class="space-y-0.5"></div>
-          </div>
+        <aside class="author-sidebar">
+          <div class="text-xs font-semibold uppercase tracking-wider mb-2 px-1" style="color:#7c8189;">Authors <span id="author-count" class="font-normal normal-case text-slate-500"></span></div>
+          <div id="author-status" class="hidden text-[11px] text-slate-500 px-1 mb-1.5"></div>
+          <div id="author-list" class="space-y-0.5"></div>
         </aside>
         <!-- Main grid -->
-        <main style="flex:1; min-width:0;">
-          <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:16px;">
-            <input id="lib-search" type="text" placeholder="Search title or author..." style="flex:1 1 auto; min-width:180px; background:#020617; border:1px solid #1e293b; border-radius:6px; padding:8px 12px; font-size:14px; color:#e2e8f0;" />
-            <select id="lib-sort" style="background:#020617; border:1px solid #1e293b; border-radius:6px; padding:8px; font-size:14px; color:#e2e8f0;">
-              <option value="author">Author A–Z</option>
-              <option value="title">Title A–Z</option>
-              <option value="added:desc">Newest first</option>
-              <option value="progress:desc">Most read</option>
-            </select>
-          </div>
-          <div id="library-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:16px;"></div>
+        <main class="lib-content">
+          <div id="library-grid" class="library-grid"></div>
           <div id="library-empty" class="hidden text-center py-24 text-slate-500">
             <p class="text-lg">No books yet.</p>
-            <p class="text-sm mt-1">Drop an <code class="text-slate-5000">.epub</code> on the Upload tab to get started.</p>
+            <p class="text-sm mt-1">Drop an <code class="text-slate-500">.epub</code> on the Upload tab to get started.</p>
           </div>
           <div id="lib-sentinel" class="h-10 flex items-center justify-center text-xs text-slate-600 hidden">Loading...</div>
         </main>
@@ -325,6 +466,9 @@
 
     <section id="view-settings" class="view hidden">
       <h2 class="text-lg font-semibold tracking-tight mb-5">Settings</h2>
+      <div id="settings-loading" class="hidden flex items-center text-sm text-slate-400 mb-4">
+        <span class="spinner"></span>Loading settings…
+      </div>
       <div class="grid lg:grid-cols-3 gap-6">
         <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
           <div class="flex items-center justify-between mb-3">
@@ -689,7 +833,15 @@
       const r = await fetch('/health');
       const j = await r.json();
       $('#health-dot').className = 'inline-block w-2 h-2 rounded-full bg-emerald-500 pulse-dot';
-      $('#health-text').textContent = 'online · ' + j.books_root + ' · ' + (j.active_mounts||[]).length + ' mounts';
+      $('#health-text').textContent = 'online';
+      const mounts = j.active_mounts || [];
+      const mb = $('#mount-badge');
+      if (mounts.length) {
+        mb.textContent = mounts.length + ' mount' + (mounts.length === 1 ? '' : 's');
+        mb.classList.remove('hidden');
+      } else {
+        mb.classList.add('hidden');
+      }
     } catch {
       $('#health-dot').className = 'inline-block w-2 h-2 rounded-full bg-rose-500 pulse-dot';
       $('#health-text').textContent = 'offline';
@@ -706,8 +858,24 @@
     if (btn) btn.classList.add('bg-slate-800');
     if (name === 'library')  { loadLibrary(); loadContinue(); loadAuthors(); }
     if (name === 'upload')   loadBackends();
-    if (name === 'settings') { loadMetadata(); loadSettings(); loadStorage(); loadKoreaderSync(); }
+    if (name === 'settings') loadSettingsView();
     if (name === 'setup')    { renderSetup(); }
+  }
+
+  // Settings is a multi-fetch view. Running loadMetadata/loadSettings/loadStorage/
+  // loadKoreaderSync independently caused a race: the cards rendered piecemeal and
+  // sometimes empty. Here we show one loading indicator and await *all* fetches
+  // (using allSettled so one failed request never starves the others), then hide it.
+  async function loadSettingsView() {
+    const spinner = $('#settings-loading');
+    spinner.classList.remove('hidden');
+    await Promise.allSettled([
+      loadMetadata(),
+      loadSettings(),
+      loadStorage(),
+      loadKoreaderSync(),
+    ]);
+    spinner.classList.add('hidden');
   }
   $$('.nav-btn').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
 
@@ -775,9 +943,9 @@
     if (!items.length) { row.classList.add('hidden'); return; }
     row.classList.remove('hidden');
     scroll.innerHTML = items.map(b => `
-      <a href="#" data-continue="${b.id}" class="continue-card shrink-0 w-24 flex flex-col gap-1.5 group">
-        <div class="relative bg-slate-800 rounded-lg overflow-hidden" style="max-height:200px;width:auto">
-          <div style="width:100%;max-height:200px;aspect-ratio:5/7;margin:0 auto;">${coverSvg(b.title, b.author)}<img src="/api/cover/${b.id}" alt="" loading="lazy" class="absolute inset-0 w-full h-full object-contain" onerror="this.remove()"></div>
+      <a href="#" data-continue="${b.id}" class="continue-card flex flex-col gap-1.5 group" style="width:105px;">
+        <div class="relative bg-slate-800 rounded-md overflow-hidden" style="width:105px;height:150px;">
+          <div style="width:100%;height:100%;">${coverSvg(b.title, b.author)}<img src="/api/cover/${b.id}" alt="" loading="lazy" class="absolute inset-0 w-full h-full object-cover" onerror="this.remove()"></div>
           <div class="absolute bottom-0 left-0 right-0 h-1 bg-slate-800">
             <div class="h-full bg-indigo-500" style="width:${b.progress_pct||0}%"></div>
           </div>
@@ -931,11 +1099,11 @@
             </div>`;
           })();
       return `
-      <article style="max-width:150px; width:100%; border-radius:12px; overflow:hidden; border:1px solid rgba(30,41,59,0.6); background:rgba(15,23,42,0.4);">
-        <div class="relative bg-slate-800 ${coverCls}" style="aspect-ratio:5/7; width:100%;">${coverSvg(b.title, b.author)}<img src="/api/cover/${b.id}" alt="" loading="lazy" class="absolute inset-0 w-full h-full object-cover" onerror="this.remove()">${fmtBadge}${finishBadge}</div>
+      <article class="book-card" style="background:rgba(32,36,46,0.5); border:1px solid #2c313c;">
+        <div class="cover relative bg-slate-800 ${coverCls}">${coverSvg(b.title, b.author)}<img src="/api/cover/${b.id}" alt="" loading="lazy" class="absolute inset-0 w-full h-full object-cover" onerror="this.remove()">${fmtBadge}${finishBadge}</div>
         <div class="p-3">
-          <div class="text-sm font-medium leading-snug line-clamp-2">${esc(b.title)}</div>
-          <div class="text-xs text-slate-400 mt-1 line-clamp-1">${esc(b.author || '—')}</div>
+          <div class="title text-sm font-semibold leading-snug">${esc(b.title)}</div>
+          <div class="author text-xs mt-1" style="color:#9aa1ad;">${esc(b.author || '—')}</div>
           ${progBar}
         </div>
       </article>`;
