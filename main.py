@@ -317,11 +317,17 @@ def mount_storage(cfg: StorageConfig) -> dict:
 
     mountpoint = CLOUD_MOUNT_ROOT / _slugify(f"{cfg.backend}_{cfg.remote_name}")
     if os.path.ismount(str(mountpoint)):
-        # rclone mount --daemon forks and its launcher exits immediately, so the
-        # _mounts registry (which tracks the launcher Popen) can never see it
-        # "still running". Detect an already-attached FUSE fs directly and reuse
-        # it instead of stacking a second mount on top.
-        return {"status": "already-mounted", "mountpoint": str(mountpoint)}
+        # Something is attached here. But after a container restart the daemon
+        # is gone while the kernel mount lingers STALE ("Transport endpoint is
+        # not connected"). A healthy mount lists its directory; a stale one
+        # raises OSError. Reuse only a live mount, otherwise detach and remount.
+        try:
+            os.listdir(str(mountpoint))
+            # Live mount: reuse it instead of stacking a second one on top
+            # (rclone --daemon forks, so the launcher Popen can't be tracked).
+            return {"status": "already-mounted", "mountpoint": str(mountpoint)}
+        except OSError:
+            log.info("stale mount at %s, detaching before remount", mountpoint)
     _force_unmount(mountpoint)
     mountpoint.mkdir(parents=True, exist_ok=True)
 
@@ -739,10 +745,17 @@ def _startup() -> None:
 
 @app.get("/health")
 def health() -> dict:
+    # `rclone mount --daemon` forks into the background and its launcher Popen
+    # exits immediately, so `proc.poll()` is never None. Count a mount as active
+    # when the kernel actually reports the FUSE fs as attached (same rule
+    # _scan_roots uses) -- otherwise the badge shows "0 mounts" while active.
     return {
         "status": "ok", "service": "codexserver", "version": "0.4.0",
         "books_root": BOOKS_ROOT, "cloud_mount_root": str(CLOUD_MOUNT_ROOT),
-        "active_mounts": [sid for sid, m in _mounts.items() if m["proc"].poll() is None],
+        "active_mounts": [
+            sid for sid, m in _mounts.items()
+            if os.path.ismount(str(m.get("mountpoint", "")))
+        ],
     }
 
 
@@ -1103,6 +1116,10 @@ def delete_storage(sid: int, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(404, "storage config not found")
     db.delete(s)
     db.commit()
+    # Rebuild the rclone config now, otherwise the deleted remote's section
+    # lingers in rclone.conf (duplicate [remote] blocks, stale tokens) until
+    # the next container restart.
+    _ensure_rclone_config(db)
     return {"deleted": sid}
 
 
