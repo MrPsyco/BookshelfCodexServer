@@ -259,17 +259,17 @@
         <div id="continue-scroll" class="flex gap-3 overflow-x-auto pb-2"></div>
       </div>
 
-      <div class="flex flex-col lg:flex-row gap-6">
+      <div style="display:flex; gap:24px;">
         <!-- Author sidebar -->
-        <aside class="lg:w-56 shrink-0">
-          <div class="lg:sticky lg:top-20 max-h-[70vh] overflow-y-auto rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+        <aside style="width:224px; flex:0 0 auto;">
+          <div style="position:sticky; top:80px; max-height:70vh; overflow-y:auto; border-radius:12px; border:1px solid #1e293b; background:rgba(15,23,42,0.4); padding:12px;">
             <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 px-1">Authors <span id="author-count" class="font-normal normal-case text-slate-500"></span></div>
             <div id="author-list" class="space-y-0.5"></div>
           </div>
         </aside>
 
         <!-- Main grid -->
-        <div class="flex-1 min-w-0">
+        <div style="flex:1 1 auto; min-width:0;">
           <div class="flex flex-wrap items-center gap-2 mb-4">
             <input id="lib-search" type="text" placeholder="Search title or author…" class="flex-1 min-w-[180px] bg-slate-950 border border-slate-800 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
             <select id="lib-sort" class="bg-slate-950 border border-slate-800 rounded-md px-2 py-2 text-sm">
@@ -279,7 +279,7 @@
               <option value="progress:desc">Most read</option>
             </select>
           </div>
-          <div id="library-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 gap-4"></div>
+          <div id="library-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:16px;"></div>
           <div id="library-empty" class="hidden text-center py-24 text-slate-500">
             <p class="text-lg">No books yet.</p>
             <p class="text-sm mt-1">Drop an <code>.epub</code> on the Upload tab to get started.</p>
@@ -718,8 +718,8 @@
     if (!items.length) { row.classList.add('hidden'); return; }
     row.classList.remove('hidden');
     scroll.innerHTML = items.map(b => `
-      <a href="#" data-continue="${b.id}" class="continue-card shrink-0 w-24 flex flex-col gap-1 group">
-        <div class="relative aspect-[5/7] bg-slate-800 rounded-lg overflow-hidden">
+      <a href="#" data-continue="${b.id}" class="continue-card shrink-0 w-24 flex flex-col gap-1.5 group">
+        <div class="relative bg-slate-800 rounded-lg overflow-hidden" style="aspect-ratio:5/7;max-height:220px;width:100%">
           ${coverSvg(b.title, b.author)}<img src="/api/cover/${b.id}" alt="" loading="lazy" class="absolute inset-0 w-full h-full object-cover" onerror="this.remove()">
           <div class="absolute bottom-0 left-0 right-0 h-1 bg-slate-800">
             <div class="h-full bg-indigo-500" style="width:${b.progress_pct||0}%"></div>
@@ -820,8 +820,8 @@
             </div>`;
           })();
       return `
-      <article class="rounded-xl overflow-hidden cover-shadow bg-slate-900/40 border border-slate-800/60 hover:border-slate-700 transition">
-        <div class="relative aspect-[5/7] bg-slate-800 ${coverCls}">${coverSvg(b.title, b.author)}<img src="/api/cover/${b.id}" alt="" loading="lazy" class="absolute inset-0 w-full h-full object-cover" onerror="this.remove()">${fmtBadge}${finishBadge}</div>
+      <article style="max-width:150px; width:100%; border-radius:12px; overflow:hidden; border:1px solid rgba(30,41,59,0.6); background:rgba(15,23,42,0.4);">
+        <div class="relative bg-slate-800 ${coverCls}" style="aspect-ratio:5/7; width:100%;">${coverSvg(b.title, b.author)}<img src="/api/cover/${b.id}" alt="" loading="lazy" class="absolute inset-0 w-full h-full object-cover" onerror="this.remove()">${fmtBadge}${finishBadge}</div>
         <div class="p-3">
           <div class="text-sm font-medium leading-snug line-clamp-2">${esc(b.title)}</div>
           <div class="text-xs text-slate-400 mt-1 line-clamp-1">${esc(b.author || '—')}</div>

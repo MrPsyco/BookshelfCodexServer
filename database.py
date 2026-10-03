@@ -52,6 +52,8 @@ def _ensure_columns() -> None:
         with engine.begin() as conn:
             if "koreader_hash" not in cols:
                 conn.execute(text("ALTER TABLE books ADD COLUMN koreader_hash VARCHAR(32)"))
+            if "metadata_enriched" not in cols:
+                conn.execute(text("ALTER TABLE books ADD COLUMN metadata_enriched BOOLEAN NOT NULL DEFAULT 0"))
         # index is best-effort; duplicate index will raise, we ignore.
         with engine.begin() as conn:
             for ddl in (

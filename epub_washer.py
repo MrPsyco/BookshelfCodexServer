@@ -71,6 +71,20 @@ def _provider_internal_opf(blob: bytes, _config) -> tuple[str, str]:
         return "", ""
 
 
+def enrich_from_path(path: str) -> tuple[str, str]:
+    """Extract (title, author) from an EPUB on disk via its own OPF.
+
+    Used by the background metadata-enrichment task, which has storage paths
+    (not in-memory blobs). Returns ("", "") if the file is missing, unreadable,
+    not a valid EPUB, or its OPF carries no dc:title/dc:creator.
+    """
+    try:
+        with zipfile.ZipFile(path) as zf:
+            return _from_opf(zf)
+    except (zipfile.BadZipFile, OSError, FileNotFoundError):
+        return "", ""
+
+
 # ---- Provider 2: Google Books API ---------------------------------------------
 
 def _provider_google_books(blob: bytes, config) -> tuple[str, str]:

@@ -1,0 +1,22 @@
+# Never ship these into the Docker build context.
+# FUSE/rclone cloud mounts (live or stale) and the production SQLite DB
+# must stay on the host — they are bind-mounted at runtime, not baked in.
+
+# Cloud mounts (rclone FUSE targets under mnt/)
+/mnt/
+/cloud/
+/rclone/
+
+# Live data + caches
+/library.db*
+*.db
+*.db-wal
+*.db-shm
+/cover_cache/
+
+# Git + scratch
+.git/
+.gitignore
+*.pyc
+__pycache__/
+cmsg*.txt

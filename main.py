@@ -38,6 +38,7 @@ import posixpath
 import re
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -385,6 +386,15 @@ def remount_all(db: Session) -> None:
 _SCAN_STATE = {"running": False, "added": 0, "started_at": None, "finished_at": None, "error": None}
 _scan_lock = threading.Lock()
 
+# Background metadata enrichment: how often to poll for unresolved books after
+# a full pass. Once resolved (metadata_enriched=True), a book is never re-read.
+_ENRICH_STATE = {"running": False}
+_enrich_lock = threading.Lock()
+_ENRICH_POLL_SECONDS = 300.0
+_ENRICH_BATCH_SIZE = 200
+_ENRICH_WORKERS = 8
+_ENRICH_BATCH_TIMEOUT = 120.0
+
 
 def _scan_roots() -> list:
     """Return (path, backend, label) for every scan target: the local books
@@ -434,15 +444,16 @@ def _wait_for_mount_readiness(timeout: float = 120.0) -> None:
 
 
 def _scan_author_title(p: Path) -> tuple:
-    """Derive author/title from the filename. Books named 'Title - Author.ext'
-    split on the LAST ' - '; the tail is the author, the head is the title."""
-    stem = p.stem
-    if " - " in stem:
-        title, _, author = stem.rpartition(" - ")
-        title, author = title.strip(), author.strip()
-        if title and author and len(author) <= 80:
-            return title, author
-    return stem.strip(), "Unknown Author"
+    """Fallback metadata: full filename stem as title, author unknown.
+
+    We deliberately do NOT parse "Author - Title.epub" out of the filename —
+    naming conventions vary too much (Calibre, plain, '[tag] Author - ...',
+    'Title - Author', bare titles) and mis-parsing produces garbage. The scan
+    must complete in seconds and index thousands of files, so real metadata
+    is filled in later by the background enrichment task (see
+    `_enrich_metadata_worker`), which reads the EPUB's own OPF.
+    """
+    return p.stem.strip(), "Unknown Author"
 
 
 def _scan_library() -> int:
@@ -465,33 +476,39 @@ def _scan_library() -> int:
             rp = Path(root)
             if not rp.exists():
                 continue
-            for p in rp.rglob("*"):
-                try:
-                    if not p.is_file():
+            # os.walk with an onerror handler instead of Path.rglob():
+            # rglob raises straight through a transient FUSE/network error on a
+            # single directory (e.g. "Errno 5 I/O error" when Google Drive
+            # briefly stops answering), which killed an otherwise-healthy scan
+            # of 20k+ books. os.walk lets us skip the bad directory and keep
+            # indexing everything else.
+            def _on_walk_error(err: OSError) -> None:
+                log.warning("scan: skipping unreadable dir (%s): %s", err.filename, err)
+
+            for dirpath, _dirnames, filenames in os.walk(root, onerror=_on_walk_error):
+                for fn in filenames:
+                    p = Path(dirpath) / fn
+                    ext = Path(fn).suffix.lstrip(".").lower()
+                    if ext not in _EBOOK_EXTENSIONS:
                         continue
-                except OSError:
-                    continue
-                ext = p.suffix.lstrip(".").lower()
-                if ext not in _EBOOK_EXTENSIONS:
-                    continue
-                sp = str(p)
-                if sp in existing:
-                    continue
-                title, author = _scan_author_title(p)
-                try:
-                    size = p.stat().st_size
-                except OSError:
-                    size = None
-                batch.append(Book(
-                    title=title, author=author, storage_path=sp,
-                    storage_backend=label, file_size=size, koreader_hash=None,
-                ))
-                existing.add(sp)
-                if len(batch) >= 50:
-                    db.add_all(batch)
-                    db.commit()
-                    added += len(batch)
-                    batch = []
+                    sp = str(p)
+                    if sp in existing:
+                        continue
+                    title, author = _scan_author_title(p)
+                    try:
+                        size = p.stat().st_size
+                    except OSError:
+                        size = None
+                    batch.append(Book(
+                        title=title, author=author, storage_path=sp,
+                        storage_backend=label, file_size=size, koreader_hash=None,
+                    ))
+                    existing.add(sp)
+                    if len(batch) >= 50:
+                        db.add_all(batch)
+                        db.commit()
+                        added += len(batch)
+                        batch = []
         if batch:
             db.add_all(batch)
             db.commit()
@@ -545,6 +562,133 @@ def start_library_scan() -> None:
     threading.Thread(target=_run, daemon=True, name="library-scan").start()
 
 
+# ---- Background metadata enrichment ----------------------------------
+
+
+def _needs_enrichment(db: Session, limit: int) -> list[Book]:
+    """Books whose metadata is still the scan placeholder (or was mis-parsed
+    by older code) — i.e. everything not yet marked metadata_enriched.
+    Capped to `limit` so a huge backlog is processed in bounded batches rather
+    than materializing tens of thousands of ORM objects at once."""
+    return (
+        db.query(Book)
+        .filter(Book.metadata_enriched.is_(False))
+        .order_by(Book.id.asc())
+        .limit(limit)
+        .all()
+    )
+
+
+def _enrich_metadata_worker() -> None:
+    """Fill real title/author from each book's own OPF, continuously.
+
+    Loops forever: each pass processes a bounded batch of rows where
+    metadata_enriched is False, then sleeps. Reading a cloud EPUB goes over
+    FUSE/network, so the OPF extraction is parallelized across a small thread
+    pool and results are committed once per batch (not once per book — the old
+    per-book commit meant one fsync per row, ~700/h instead of thousands/h).
+    Idempotent: only metadata_enriched=False rows are touched. A book that
+    yields ("", "") as .epub is left unmarked so a later pass retries
+    (transient mount/zip failure); non-EPUB formats are marked done."""
+    with _enrich_lock:
+        if _ENRICH_STATE["running"]:
+            return
+        _ENRICH_STATE["running"] = True
+    try:
+        # Cloud files live behind FUSE mounts that take ~30-40s to become
+        # listable on a cold start. Reading an EPUB before that throws
+        # FileNotFoundError; waiting here means we don't burn a whole pass
+        # marking every cloud book "enriched" with no metadata actually read.
+        _wait_for_mount_readiness()
+        while True:
+            with SessionLocal() as db:
+                pending = _needs_enrichment(db, _ENRICH_BATCH_SIZE)
+                if not pending:
+                    time.sleep(_ENRICH_POLL_SECONDS)
+                    continue
+
+                log.info("metadata enrichment: %d book(s) in this batch", len(pending))
+
+                def _extract(book: Book) -> tuple[str, str]:
+                    try:
+                        t, a = epub_washer.enrich_from_path(book.storage_path)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("enrich %s failed: %s", book.id, e)
+                        t, a = "", ""
+                    return t, a
+
+                results: dict[int, tuple[str, str]] = {}
+                ex = ThreadPoolExecutor(max_workers=_ENRICH_WORKERS)
+                try:
+                    futs = {ex.submit(_extract, b): b for b in pending}
+                    # Complete what we can within a bounded window. A single
+                    # scripted FUSE/network read that never returns must not
+                    # wedge the whole enrichment loop forever (the old code
+                    # iterated as_completed() with no timeout, so one hung
+                    # Google Drive read silently parked the worker for good and
+                    # the wrong-author sidebar never progressed).
+                    try:
+                        for fut in as_completed(futs, timeout=_ENRICH_BATCH_TIMEOUT):
+                            book = futs[fut]
+                            try:
+                                title, author = fut.result()
+                            except Exception as e:  # noqa: BLE001
+                                log.warning("enrich %s failed: %s", book.id, e)
+                                title, author = "", ""
+                            results[book.id] = (title, author)
+                    except TimeoutError:
+                        # Some reads are still hung past the window. Abandon
+                        # them; they stay metadata_enriched=False and retry.
+                        pass
+                finally:
+                    # MUST NOT block on hung reads: shutdown(wait=False) returns
+                    # immediately and abandons any still-running futures, so a
+                    # stuck FUSE read can't stall the next batch. (The `with`
+                    # form calls shutdown(wait=True) and would hang the same way
+                    # the timeout was meant to prevent.)
+                    ex.shutdown(wait=False, cancel_futures=True)
+
+                for book in pending:
+                    title, author = results.get(book.id, ("", ""))
+                    is_epub = book.storage_path.lower().endswith(".epub")
+                    got_data = bool(title or author)
+                    if got_data or not is_epub:
+                        # We have authoritative OPF data for this book — write
+                        # BOTH fields unconditionally so a mis-parsed legacy
+                        # author (from the old filename splitter) is corrected,
+                        # not left standing. Missing author falls back to
+                        # "Unknown Author", never the stale value.
+                        book.title = title if title else book.title
+                        if author and author != "Unknown Author":
+                            book.author = author
+                        elif title and not author:
+                            book.author = "Unknown Author"
+                        book.metadata_enriched = True
+                db.commit()
+                log.info("metadata enrichment: batch complete")
+
+                # Keep chewing through the backlog without a sleep when the
+                # batch came back full (more pending rows definitely remain).
+                # Only idle when the batch was short — i.e. we've reached the
+                # end and can wait for the next scan to add fresh books. The
+                # old code slept _ENRICH_POLL_SECONDS after EVERY batch, which
+                # capped throughput at ~BATCH_SIZE per 5 min and left a large
+                # backlog (and thus a wrong author sidebar) for hours.
+                if len(pending) < _ENRICH_BATCH_SIZE:
+                    time.sleep(_ENRICH_POLL_SECONDS)
+    except Exception as e:  # noqa: BLE001
+        log.exception("metadata enrichment crashed: %s", e)
+    finally:
+        with _enrich_lock:
+            _ENRICH_STATE["running"] = False
+
+
+def start_metadata_enrichment() -> None:
+    threading.Thread(
+        target=_enrich_metadata_worker, daemon=True, name="metadata-enrich"
+    ).start()
+
+
 @app.get("/api/scan/status", dependencies=[Depends(require_ui_auth)])
 def api_scan_status() -> dict:
     with _scan_lock:
@@ -586,6 +730,7 @@ def _startup() -> None:
         with SessionLocal() as db:
             remount_all(db)
         start_library_scan()
+        start_metadata_enrichment()
     threading.Thread(target=_worker, daemon=True, name="remount-all").start()
     log.info("CodexServer up. BOOKS_ROOT=%s CLOUD_MOUNT_ROOT=%s", BOOKS_ROOT, CLOUD_MOUNT_ROOT)
 
@@ -874,7 +1019,7 @@ async def upload_epub(
 
     book = Book(title=title, author=author, storage_path=dest,
                 storage_backend=chosen_label, file_size=len(blob),
-                koreader_hash=kh)
+                koreader_hash=kh, metadata_enriched=True)
     db.add(book)
     db.commit()
     db.refresh(book)

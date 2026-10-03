@@ -39,6 +39,10 @@ class Book(Base):
     # 1024-byte blocks at the partialMD5 offsets). NULL until a real file is
     # attached and hashed. Used to JOIN kosync_progress rows to books.
     koreader_hash = Column(String(32), nullable=True, index=True)
+    # True once real title/author have been extracted from the EPUB's OPF
+    # (internal_opf). The scanner sets placeholder metadata instantly and
+    # leaves this False so the background enrichment task knows to fill it in.
+    metadata_enriched = Column(Boolean, default=False, nullable=False)
 
 
 class Progress(Base):
