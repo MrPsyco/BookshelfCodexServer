@@ -63,6 +63,11 @@
     #nav-search input:focus { border-color: var(--accent) !important; }
 
     /* ---- app shell layout ---- */
+    /* .hidden must ALWAYS win over per-view display rules. #view-library has
+       display:flex via an ID selector (specificity 100), which would otherwise
+       beat the Tailwind class .hidden (specificity 10) and keep the library
+       visible after tab switches. */
+    .view.hidden { display: none !important; }
     #app-main { height: calc(100vh - var(--nav-h)); overflow: hidden; }
     .view { height: 100%; }
     #view-upload, #view-settings, #view-setup { height: 100%; overflow-y: auto; padding: 24px; }
