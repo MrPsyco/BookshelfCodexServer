@@ -159,6 +159,72 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     input, select, button { font-family: inherit; }
+
+    /* ================= Settings + Setup polish ================= */
+
+    /* ---- iOS/Plex toggle switches (replaces native checkboxes) ---- */
+    input[type="checkbox"] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 44px;
+      height: 24px;
+      border-radius: 999px;
+      background: var(--surface-hi);
+      border: 1px solid var(--border);
+      position: relative;
+      cursor: pointer;
+      flex: 0 0 auto;
+      outline: none;
+      transition: background .2s ease, border-color .2s ease;
+    }
+    input[type="checkbox"]::before {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(0,0,0,.4);
+      transition: transform .2s ease;
+    }
+    input[type="checkbox"]:checked {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    input[type="checkbox"]:checked::before {
+      transform: translateX(20px);
+    }
+    input[type="checkbox"]:focus-visible {
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+
+    /* ---- settings dashboard: responsive grid + card elevation ---- */
+    #view-settings .grid {
+      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+      gap: 24px;
+    }
+    #view-settings .rounded-xl {
+      border-radius: 8px;
+      box-shadow: 0 4px 24px -4px rgba(0,0,0,0.45);
+    }
+
+    /* ---- setup & connect: centered reading column ---- */
+    #view-setup {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    #view-setup > * {
+      width: 100%;
+      max-width: 900px;
+    }
+    #cx-setup-base-url,
+    #cx-setup-user,
+    #cx-setup-pass {
+      max-width: 400px;
+    }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-full">
