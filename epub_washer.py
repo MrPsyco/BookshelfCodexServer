@@ -186,11 +186,23 @@ def enrich_from_path(path: str) -> tuple[str, str]:
     Used by the background metadata-enrichment task, which has storage paths
     (not in-memory blobs). Returns ("", "") if the file is missing, unreadable,
     not a valid EPUB, or its OPF carries no dc:title/dc:creator.
+
+    Reads the file SEQUENTIALLY (one fh.read()) and parses the OPF from an
+    in-memory buffer. Doing `zipfile.ZipFile(path)` directly forces random-
+    access seeks over the cloud FUSE mount (a cold rclone VFS answers each seek
+    with a remote round-trip), which measured ~19s/book vs ~1.1s/book for a
+    single sequential read -- a 16x+ difference that was silently throttling
+    the whole enrichment backlog.
     """
     try:
-        with zipfile.ZipFile(path) as zf:
+        with open(path, "rb") as fh:
+            blob = fh.read()
+    except (OSError, FileNotFoundError):
+        return "", ""
+    try:
+        with zipfile.ZipFile(io.BytesIO(blob)) as zf:
             return _from_opf(zf)
-    except (zipfile.BadZipFile, OSError, FileNotFoundError):
+    except (zipfile.BadZipFile, ET.ParseError):
         return "", ""
 
 
