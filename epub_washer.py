@@ -85,6 +85,51 @@ def enrich_from_path(path: str) -> tuple[str, str]:
         return "", ""
 
 
+def enrich_from_path_providers(path: str, configs: list) -> tuple[str, str]:
+    """Resolve (title, author) using only the providers enabled in the WebUI.
+
+    `configs` is the list of active MetadataConfig rows serialized as plain
+    dicts ({provider_name, priority, api_key_or_url}), already filtered for
+    is_active=True and sorted by ascending priority. The worker reads these
+    fresh on every batch, so enabling/disabling a provider in the UI takes
+    effect immediately without a restart.
+
+    Fast path: when `internal_opf` is enabled, read the EPUB's own OPF directly
+    (`enrich_from_path` only touches the OPF entries, not the whole file). Only
+    when that yields nothing (or OPF is disabled) do we fall back to the
+    remaining enabled providers (google_books / ollama / openai), which need the
+    raw file bytes for text-based lookup.
+    """
+    import types
+
+    def _snap(c: dict) -> types.SimpleNamespace:
+        return types.SimpleNamespace(
+            provider_name=c.get("provider_name"),
+            priority=c.get("priority", 100),
+            api_key_or_url=c.get("api_key_or_url"),
+        )
+
+    objs = [_snap(c) for c in configs]
+    opf_enabled = any(o.provider_name == "internal_opf" for o in objs)
+    if opf_enabled:
+        t, a = enrich_from_path(path)
+        if t and a:
+            return t, a
+
+    fallback = [o for o in objs if o.provider_name != "internal_opf"]
+    if not fallback:
+        return "", ""
+
+    try:
+        with open(path, "rb") as fh:
+            blob = fh.read()
+    except (OSError, FileNotFoundError):
+        return "", ""
+    if not blob:
+        return "", ""
+    return enrich(blob, fallback)
+
+
 # ---- Provider 2: Google Books API ---------------------------------------------
 
 def _provider_google_books(blob: bytes, config) -> tuple[str, str]:

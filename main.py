@@ -615,9 +615,32 @@ def _enrich_metadata_worker() -> None:
 
                 log.info("metadata enrichment: %d book(s) in this batch", len(pending))
 
+                # Read the enabled provider chain from the DB fresh on EVERY
+                # batch so toggling a provider in the WebUI applies immediately
+                # (no restart, no cached config). Serialize to plain dicts so
+                # the worker threads share no live ORM objects.
+                active_providers = [
+                    {
+                        "provider_name": p.provider_name,
+                        "priority": p.priority,
+                        "api_key_or_url": p.api_key_or_url,
+                    }
+                    for p in db.query(MetadataConfig)
+                    .filter(MetadataConfig.is_active.is_(True))
+                    .order_by(MetadataConfig.priority.asc())
+                    .all()
+                ]
+                if not active_providers:
+                    # Nothing enabled in the UI yet — don't spin the backlog
+                    # fruitlessly; wait for the user to enable a provider.
+                    time.sleep(_ENRICH_POLL_SECONDS)
+                    continue
+
                 def _extract(book: Book) -> tuple[str, str]:
                     try:
-                        t, a = epub_washer.enrich_from_path(book.storage_path)
+                        t, a = epub_washer.enrich_from_path_providers(
+                            book.storage_path, active_providers
+                        )
                     except Exception as e:  # noqa: BLE001
                         log.warning("enrich %s failed: %s", book.id, e)
                         t, a = "", ""
