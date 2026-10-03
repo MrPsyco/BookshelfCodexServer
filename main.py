@@ -712,13 +712,13 @@ def _enrich_metadata_worker() -> None:
                 # WebUI applies to the next batch with no restart.
                 settings_raw = _get_settings_raw(db)
 
-                def _extract(book: Book) -> tuple[str, str]:
+                def _extract(book: Book) -> tuple[str, str, str]:
                     try:
                         # Edge case: an EPUB already has a cached cover from a
                         # previous pass; the worker only *downloads* covers when
                         # the setting is on AND no cover is cached yet (the
                         # _download_cover helper skips existing cache entries).
-                        t, a = epub_washer.enrich_from_path_providers(
+                        t, a, src = epub_washer.enrich_from_path_providers(
                             book.storage_path, active_providers,
                             settings=settings_raw,
                             cover_cache_dir=str(COVER_CACHE_DIR),
@@ -726,10 +726,10 @@ def _enrich_metadata_worker() -> None:
                         )
                     except Exception as e:  # noqa: BLE001
                         log.warning("enrich %s failed: %s", book.id, e)
-                        t, a = "", ""
-                    return t, a
+                        t, a, src = "", "", ""
+                    return t, a, src
 
-                results: dict[int, tuple[str, str]] = {}
+                results: dict[int, tuple[str, str, str]] = {}
                 ex = ThreadPoolExecutor(max_workers=_ENRICH_WORKERS)
                 try:
                     futs = {ex.submit(_extract, b): b for b in pending}
@@ -743,11 +743,11 @@ def _enrich_metadata_worker() -> None:
                         for fut in as_completed(futs, timeout=_ENRICH_BATCH_TIMEOUT):
                             book = futs[fut]
                             try:
-                                title, author = fut.result()
+                                title, author, src = fut.result()
                             except Exception as e:  # noqa: BLE001
                                 log.warning("enrich %s failed: %s", book.id, e)
-                                title, author = "", ""
-                            results[book.id] = (title, author)
+                                title, author, src = "", "", ""
+                            results[book.id] = (title, author, src)
                     except TimeoutError:
                         # Some reads are still hung past the window. Abandon
                         # them; they stay metadata_enriched=False and retry.
@@ -761,7 +761,7 @@ def _enrich_metadata_worker() -> None:
                     ex.shutdown(wait=False, cancel_futures=True)
 
                 for book in pending:
-                    title, author = results.get(book.id, ("", ""))
+                    title, author, src = results.get(book.id, ("", "", ""))
                     is_epub = book.storage_path.lower().endswith(".epub")
                     got_data = bool(title or author)
                     if got_data or not is_epub:
@@ -776,6 +776,7 @@ def _enrich_metadata_worker() -> None:
                         elif title and not author:
                             book.author = "Unknown Author"
                         book.metadata_enriched = True
+                        book.metadata_source = src or None
                 db.commit()
                 log.info("metadata enrichment: batch complete")
 
@@ -1123,11 +1124,13 @@ async def upload_epub(
         db.query(MetadataConfig).filter(MetadataConfig.is_active.is_(True))
         .order_by(MetadataConfig.priority.asc()).all()
     )
-    title, author = epub_washer.enrich(blob, active)
+    title, author, src = epub_washer.enrich(blob, active)
     if not title:
         title = Path(file.filename).stem
     if not author:
         author = "Unknown Author"
+    # Provenance: a real provider win (src) beats the filename-derived fallback.
+    metadata_source = src if src else "filename_fallback"
 
     chosen_root, chosen_label = BOOKS_ROOT, backend
     if backend != "local":
@@ -1155,7 +1158,8 @@ async def upload_epub(
 
     book = Book(title=title, author=author, storage_path=dest,
                 storage_backend=chosen_label, file_size=len(blob),
-                koreader_hash=kh, metadata_enriched=True)
+                koreader_hash=kh, metadata_enriched=True,
+                metadata_source=metadata_source)
     db.add(book)
     db.commit()
     db.refresh(book)

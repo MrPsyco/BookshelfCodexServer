@@ -43,6 +43,12 @@ class Book(Base):
     # (internal_opf). The scanner sets placeholder metadata instantly and
     # leaves this False so the background enrichment task knows to fill it in.
     metadata_enriched = Column(Boolean, default=False, nullable=False)
+    # Which provider resolved this book's metadata (internal_opf, google_books,
+    # open_library, dnb, ollama, openai) — or "filename_fallback" when an upload
+    # carried no usable OPF and the title was derived from the filename stem.
+    # NULL until an enrichment pass records a winner. Lets audits answer
+    # "how many books came from which provider?".
+    metadata_source = Column(String(60), nullable=True)
 
 
 class Progress(Base):

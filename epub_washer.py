@@ -219,7 +219,7 @@ def enrich_from_path_providers(
     *,
     cover_cache_dir: Optional[str] = None,
     book_id: Optional[int] = None,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     """Resolve (title, author) using only the providers enabled in the WebUI.
 
     `configs` is the list of active MetadataConfig rows serialized as plain
@@ -261,19 +261,19 @@ def enrich_from_path_providers(
         # Run the OPF result through the same garbage filter as every other
         # provider; a garbage OPF title/author falls through to the chain.
         if t and a and not _is_garbage(t, a):
-            return t, a
+            return t, a, "internal_opf"
 
     fallback = [o for o in objs if o.provider_name != "internal_opf"]
     if not fallback:
-        return "", ""
+        return "", "", ""
 
     try:
         with open(path, "rb") as fh:
             blob = fh.read()
     except (OSError, FileNotFoundError):
-        return "", ""
+        return "", "", ""
     if not blob:
-        return "", ""
+        return "", "", ""
     return enrich(blob, fallback, settings=settings,
                   cover_cache_dir=cover_cache_dir, book_id=book_id)
 
@@ -644,7 +644,7 @@ def enrich(
     *,
     cover_cache_dir: Optional[str] = None,
     book_id: Optional[int] = None,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     """Walk configs (already filtered for is_active=True, sorted by priority ascending).
 
     Stops at the first provider that returns both title and author. Applies the
@@ -694,9 +694,9 @@ def enrich(
             log.info("Resolved via %s: %r / %r", cfg.provider_name, t, a)
             if download_covers:
                 _download_cover(_COVER_URL, _COVER_CACHE_DIR, _BOOK_ID)
-            return t, a
+            return t, a, cfg.provider_name
 
-    return "", ""
+    return "", "", ""
 
 
 def safe_storage_path(root: str, author: str, title: str, filename: str) -> str:
