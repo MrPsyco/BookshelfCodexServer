@@ -9,7 +9,17 @@ DATABASE_URL = f"sqlite:///{DB_PATH}"
 engine = create_engine(
     DATABASE_URL,
     echo=False,
-    connect_args={"check_same_thread": False},
+    connect_args={"check_same_thread": False, "timeout": 30},
+    # The enrichment worker runs 8 parallel OPF readers while the scanner and
+    # request handlers each hold their own session. SQLite is a single-writer
+    # DB, so a small default pool (size 5 + overflow 10) exhausts under that
+    # concurrency ("QueuePool limit of size 5 overflow 10 reached"). A roomier
+    # pool + a real busy timeout + pre_ping keeps worker threads from wedging
+    # the ASGI app mid-request.
+    pool_size=10,
+    max_overflow=30,
+    pool_timeout=30,
+    pool_pre_ping=True,
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -80,6 +90,15 @@ def _ensure_columns() -> None:
 def init_db() -> None:
     """Create all tables, run idempotent migrations, seed defaults if empty."""
     from models import MetadataConfig  # local import: avoids circular at import time
+
+    # WAL lets readers and the single writer proceed concurrently instead of
+    # blocking every read on a transaction under journal_mode=DELETE. It is a
+    # persistent DB setting: applied once, survives restarts. Necessary now that
+    # the enrichment worker, scanner, and request handlers all hit SQLite at
+    # once.
+    with engine.connect() as conn:
+        conn.execute(text("PRAGMA journal_mode=WAL"))
+        conn.execute(text("PRAGMA busy_timeout=30000"))
 
     Base.metadata.create_all(bind=engine)
     _ensure_columns()

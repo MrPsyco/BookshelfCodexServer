@@ -696,15 +696,32 @@ def start_metadata_enrichment() -> None:
 
 
 @app.get("/api/scan/status", dependencies=[Depends(require_ui_auth)])
-def api_scan_status() -> dict:
+def api_scan_status(db: Session = Depends(get_db)) -> dict:
     with _scan_lock:
-        return {
+        scan = {
             "running": _SCAN_STATE["running"],
             "added": _SCAN_STATE["added"],
             "started_at": _SCAN_STATE["started_at"].isoformat() if _SCAN_STATE["started_at"] else None,
             "finished_at": _SCAN_STATE["finished_at"].isoformat() if _SCAN_STATE["finished_at"] else None,
             "error": _SCAN_STATE["error"],
         }
+    # Enrichment progress: X = processed (metadata_enriched=True), Y = total,
+    # pending = still-outstanding rows. Fed to the UI "Scanning… (X/Y)" badge.
+    total = db.query(func.count(Book.id)).scalar() or 0
+    enriched = (
+        db.query(func.count(Book.id))
+        .filter(Book.metadata_enriched.is_(True))
+        .scalar() or 0
+    )
+    with _enrich_lock:
+        enrich_running = _ENRICH_STATE["running"]
+    return {
+        **scan,
+        "enrich_running": enrich_running,
+        "enriched": enriched,
+        "pending": max(0, total - enriched),
+        "total": total,
+    }
 
 
 @app.on_event("startup")
@@ -1077,12 +1094,19 @@ def _set_auth_status(s: StorageConfig, **fields) -> dict:
 def list_storage(db: Session = Depends(get_db)) -> list[dict]:
     out = []
     for s in db.query(StorageConfig).all():
-        mounted = s.id in _mounts and _mounts[s.id]["proc"].poll() is None
+        # `rclone mount --daemon` forks and its launcher Popen exits immediately,
+        # so `proc.poll()` is never None. A mount is "connected" only when the
+        # kernel actually reports the FUSE fs attached (same rule _scan_roots and
+        # /health use). Otherwise settings shows "unmounted" while the cloud fs
+        # is served and indexed.
+        m = _mounts.get(s.id)
+        mp = m["mountpoint"] if m else None
+        connected = bool(mp and os.path.ismount(str(mp)))
         out.append({
             "id": s.id, "label": s.label, "backend": s.backend,
             "remote_name": s.remote_name, "remote_path": s.remote_path,
             "is_active": s.is_active, "created_at": s.created_at.isoformat(),
-            "mounted": mounted, "auth": _auth_status_dict(s),
+            "mounted": connected, "auth": _auth_status_dict(s),
         })
     return out
 

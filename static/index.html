@@ -769,24 +769,37 @@
     const badge = $('#lib-scan');
     let scan;
     try { scan = await (await authedFetch('/api/scan/status')).json(); } catch { return; }
-    if (!scan.running) {
+    // "running" covers the initial file scan; the enrichment worker keeps
+    // running afterwards, so keep the badge visible while either is active.
+    const busy = !!scan.running || !!scan.enrich_running;
+    if (!busy) {
       badge.classList.add('hidden');
       return;
     }
     badge.classList.remove('hidden');
-    badge.textContent = 'Scanning…';
+    badge.textContent = _scanBadgeText(scan);
     // Re-check every 2s; reload the shelf the moment the scan completes.
     const timer = setInterval(async () => {
       let st;
       try { st = await (await authedFetch('/api/scan/status')).json(); } catch { return; }
-      if (!st.running) {
+      const stillBusy = !!st.running || !!st.enrich_running;
+      if (!stillBusy) {
         clearInterval(timer);
         badge.classList.add('hidden');
         const n = st.added || 0;
         if (n > 0) toast('Scan fertig: ' + n + ' neue(s) Buch/Bücher', 'success');
         loadLibrary(true); loadAuthors();
+      } else {
+        badge.textContent = _scanBadgeText(st);
       }
     }, 2000);
+  }
+
+  // X = verarbeitet (enriched), Y = gesamt. "(X/Y)" pending in brackets.
+  function _scanBadgeText(scan) {
+    if (scan.running) return 'Scanning… (' + (scan.added || 0) + ' gefunden)';
+    const x = scan.enriched || 0, y = scan.total || 0;
+    return 'Meta-Aufbereitung ' + x + '/' + y + ' (' + (scan.pending || 0) + ' ausstehend)';
   }
 
   function renderLibraryGrid(books, append) {
@@ -1196,7 +1209,7 @@
           <span class="font-medium">${esc(s.label)}</span>
           <span class="text-slate-500"> · ${esc(s.backend)}</span>
           ${s.remote_path ? '<span class="text-slate-500"> · ' + esc(s.remote_path) + '</span>' : ''}
-          <span class="ml-2 text-xs ${s.mounted?'text-emerald-400':'text-amber-400'}">${s.mounted?'● mounted':'○ unmounted'}</span>
+          <span class="ml-2 text-xs ${s.mounted?'text-emerald-400':'text-amber-400'}">${s.mounted?'● verbunden':'○ nicht verbunden'}</span>
           ${authBadge ? '<span class="ml-2 text-xs">' + authBadge + '</span>' : ''}
         </div>
         <div class="flex gap-2 text-xs">
