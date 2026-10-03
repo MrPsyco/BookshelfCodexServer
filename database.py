@@ -54,10 +54,25 @@ def _ensure_columns() -> None:
                 conn.execute(text("ALTER TABLE books ADD COLUMN koreader_hash VARCHAR(32)"))
         # index is best-effort; duplicate index will raise, we ignore.
         with engine.begin() as conn:
-            try:
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_books_koreader_hash ON books(koreader_hash)"))
-            except Exception:
-                pass
+            for ddl in (
+                "CREATE INDEX IF NOT EXISTS ix_books_koreader_hash ON books(koreader_hash)",
+                "CREATE INDEX IF NOT EXISTS ix_books_added_at ON books(added_at)",
+                "CREATE INDEX IF NOT EXISTS ix_books_storage_path ON books(storage_path)",
+            ):
+                try:
+                    conn.execute(text(ddl))
+                except Exception:
+                    pass
+    if insp.has_table("client_progress"):
+        with engine.begin() as conn:
+            for ddl in (
+                "CREATE INDEX IF NOT EXISTS ix_client_progress_book_id ON client_progress(book_id)",
+                "CREATE INDEX IF NOT EXISTS ix_client_progress_updated_at ON client_progress(updated_at)",
+            ):
+                try:
+                    conn.execute(text(ddl))
+                except Exception:
+                    pass
 
 
 def init_db() -> None:

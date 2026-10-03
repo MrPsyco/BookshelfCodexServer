@@ -49,6 +49,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy import or_, func, desc, asc
 
 import epub_washer
 from database import get_db, init_db, SessionLocal
@@ -63,6 +64,13 @@ CLOUD_MOUNT_ROOT = Path(os.environ.get("CLOUD_MOUNT_ROOT", "/mnt/cloud"))
 RCLONE_CONFIG = Path("/root/.config/rclone/rclone.conf")
 RCLONE_LOG_DIR = Path("/var/log/codex-rclone")
 RCLONE_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+# Extracted EPUB covers, keyed by book id. Serving a cover used to re-open the
+# EPUB zip over FUSE/network per request (hundreds of downloads for a filled
+# library). Extract once, then serve the cached file. MIME is guessed from the
+# cached extension.
+COVER_CACHE_DIR = Path(os.environ.get("COVER_CACHE_DIR", "/app/cover_cache"))
+COVER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 SESSION_COOKIE = "codex_session"
 SESSION_TTL = timedelta(days=14)
@@ -678,52 +686,144 @@ def auth_me(request: Request) -> dict:
 # ================================================================ books ===
 
 @app.get("/api/books", dependencies=[Depends(require_ui_auth)])
-def list_books(db: Session = Depends(get_db)) -> list[dict]:
-    # Client-neutral progress: every sync protocol (kosync, moon_webdav, ...)
-        # upserts one row per (user, client, document) in `client_progress`.
-        # Per book we surface whatever the MOST-RECENTLY-SYNCED reader reported,
-        # so Library and Settings agree on the same percentage for a book.
-        rows = (
-            db.query(ClientProgress)
-            .order_by(ClientProgress.updated_at.desc())
-            .all()
+def list_books(
+    q: Optional[str] = None,
+    author: Optional[str] = None,
+    sort: str = "author",
+    order: str = "asc",
+    limit: int = 60,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Searchable, sortable, paginated book list.
+
+    ``sort`` one of: author | title | added | progress. ``order`` asc|desc.
+    ``q`` filters title+author (case-insensitive substring); ``author`` is an
+    exact author filter (drives the sidebar). Returns
+    {items, total, limit, offset} so the UI can page without N+1 requests.
+
+    Progress comes from ``client_progress``, matched by the already-indexed
+    ``book_id`` column (not a per-document O(N) scan) — the old path called
+    ``_dav_book_for_key`` for every sync row, re-scanning all books each time.
+    """
+    q = (q or "").strip()
+    author = (author or "").strip()
+    query = db.query(Book)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(or_(Book.title.ilike(like), Book.author.ilike(like)))
+    if author:
+        query = query.filter(Book.author == author)
+    total = query.count()
+
+    # Progress: one latest row per book, keyed by book_id (indexed).
+    rows = (
+        db.query(ClientProgress)
+        .filter(ClientProgress.book_id.isnot(None), ClientProgress.percentage.isnot(None))
+        .order_by(ClientProgress.updated_at.desc())
+        .all()
+    )
+    latest_by_book: dict[int, dict] = {}
+    for cp in rows:
+        if cp.book_id in latest_by_book:
+            continue
+        latest_by_book[cp.book_id] = {"pct": float(cp.percentage), "client": cp.client}
+
+    # Sorting. Progress is derived in Python; the rest map to SQL columns.
+    if sort == "progress":
+        books = query.all()
+        books.sort(
+            key=lambda b: (latest_by_book.get(b.id, {}).get("pct", -1.0) or -1.0),
+            reverse=(order == "desc"),
         )
-        latest_by_book: dict[int, dict] = {}
-        for cp in rows:
-            book = _dav_book_for_key(db, cp.document or "")
-            if book is None or cp.percentage is None:
-                continue
-            if book.id in latest_by_book:
-                continue  # newest-first; first hit per book is the latest sync
-            latest_by_book[book.id] = {
-                "pct": float(cp.percentage),
-                "client": cp.client,
-            }
-        books = db.query(Book).order_by(Book.added_at.desc()).all()
-        out = []
-        for b in books:
-            ext = (b.storage_path.rsplit(".", 1)[-1] if "." in b.storage_path else "").lower()
-            mime = _OPDS_MIME_BY_EXT.get(ext, "application/octet-stream")
-            entry = latest_by_book.get(b.id)
-            pct_raw = entry["pct"] if entry else None
-            is_finished = pct_raw is not None and pct_raw >= 1.0
-            out.append({
-                "id": b.id,
-                "title": b.title,
-                "author": b.author,
-                "storage_path": b.storage_path,
-                "storage_backend": b.storage_backend,
-                "file_size": b.file_size,
-                "added_at": b.added_at.isoformat(),
-                "format": mime,
-                "format_ext": ext or None,
-                "koreader_hash": b.koreader_hash,
-                "progress": pct_raw,
-                "progress_pct": int(round(pct_raw * 100)) if pct_raw is not None else None,
-                "is_finished": is_finished,
-                "progress_client": entry["client"] if entry else None,
-            })
-        return out
+        books = books[offset:offset + limit]
+    else:
+        col = {"title": Book.title, "added": Book.added_at, "author": Book.author}.get(sort, Book.author)
+        order_expr = desc(col) if order == "desc" else asc(col)
+        # Secondary sort: keep deterministic within equal primary values.
+        books = query.order_by(order_expr, asc(Book.id)).offset(offset).limit(limit).all()
+
+    out = []
+    for b in books:
+        ext = (b.storage_path.rsplit(".", 1)[-1] if "." in b.storage_path else "").lower()
+        mime = _OPDS_MIME_BY_EXT.get(ext, "application/octet-stream")
+        entry = latest_by_book.get(b.id)
+        pct_raw = entry["pct"] if entry else None
+        is_finished = pct_raw is not None and pct_raw >= 1.0
+        out.append({
+            "id": b.id,
+            "title": b.title,
+            "author": b.author,
+            "storage_path": b.storage_path,
+            "storage_backend": b.storage_backend,
+            "file_size": b.file_size,
+            "added_at": b.added_at.isoformat(),
+            "format": mime,
+            "format_ext": ext or None,
+            "koreader_hash": b.koreader_hash,
+            "progress": pct_raw,
+            "progress_pct": int(round(pct_raw * 100)) if pct_raw is not None else None,
+            "is_finished": is_finished,
+            "progress_client": entry["client"] if entry else None,
+        })
+    return {"items": out, "total": total, "limit": limit, "offset": offset}
+
+
+@app.get("/api/books/continue", dependencies=[Depends(require_ui_auth)])
+def continue_reading(limit: int = 20, db: Session = Depends(get_db)) -> dict:
+    """Books with active progress, most-recently-synced first (Netflix row).
+
+    Only unfinished books (0 < progress < 100%) qualify. Matches the same
+    client_progress rows the Library uses, but ordered by recency.
+    """
+    rows = (
+        db.query(ClientProgress)
+        .filter(ClientProgress.book_id.isnot(None), ClientProgress.percentage.isnot(None))
+        .order_by(ClientProgress.updated_at.desc())
+        .all()
+    )
+    seen: set[int] = set()
+    latest: dict[int, dict] = {}
+    for cp in rows:
+        if cp.book_id in seen:
+            continue
+        seen.add(cp.book_id)
+        pct = float(cp.percentage)
+        if pct >= 1.0:
+            continue
+        latest[cp.book_id] = {"pct": pct, "client": cp.client}
+        if len(latest) >= limit:
+            break
+    out = []
+    for bid, entry in latest.items():
+        b = db.get(Book, bid)
+        if b is None:
+            continue
+        out.append({
+            "id": b.id,
+            "title": b.title,
+            "author": b.author,
+            "progress": entry["pct"],
+            "progress_pct": int(round(entry["pct"] * 100)),
+            "progress_client": entry["client"],
+        })
+    return {"items": out}
+
+
+@app.get("/api/books/authors", dependencies=[Depends(require_ui_auth)])
+def list_authors(db: Session = Depends(get_db)) -> dict:
+    """Distinct authors with book counts, for the Calibre-style filter sidebar."""
+    rows = (
+        db.query(Book.author, func.count(Book.id))
+        .group_by(Book.author)
+        .order_by(func.lower(Book.author).asc())
+        .all()
+    )
+    authors = [
+        {"author": a or "Unknown Author", "count": c}
+        for a, c in rows
+    ]
+    return {"items": authors, "total": len(authors)}
 
 
 @app.post("/upload", dependencies=[Depends(require_ui_auth)])
@@ -2040,6 +2140,36 @@ def _epub_cover(path: str) -> tuple[bytes, str] | None:
         zf.close()
 
 
+def _cached_cover(book: Book) -> tuple[bytes, str] | None:
+    """Return (bytes, mime) for a book's cover, using an on-disk cache.
+
+    Cache key is the book id; the file is written with an extension matching
+    its MIME so the cache dir is human-inspectable and any future thumbnailer
+    can distinguish jpeg/png. A cache miss extracts from the EPUB once and
+    stores it; a hit avoids the FUSE/network re-read entirely.
+    """
+    src = Path(book.storage_path)
+    if not src.is_file():
+        return None
+    # Hit: any existing cache entry for this book.
+    for ext, mime in ((".jpg", "image/jpeg"), (".jpeg", "image/jpeg"), (".png", "image/png")):
+        cf = COVER_CACHE_DIR / f"{book.id}{ext}"
+        if cf.is_file():
+            return cf.read_bytes(), mime
+    # Miss: extract and cache under the matching extension.
+    cover = _epub_cover(str(src))
+    if cover is None:
+        return None
+    data, mime = cover
+    ext = ".png" if mime == "image/png" else ".jpg"
+    cf = COVER_CACHE_DIR / f"{book.id}{ext}"
+    try:
+        cf.write_bytes(data)
+    except Exception:  # noqa: BLE001 — cache write must never break serving
+        log.warning("cover cache write failed for book %s", book.id, exc_info=True)
+    return data, mime
+
+
 # OPDS content type per OPDS 1.2 / RFC 5023. Some clients (notably Moon+
 # Reader) are picky: they want the charset spelled out AND the profile
 # parameter to match what their parser pattern-matches.
@@ -2152,10 +2282,7 @@ def opds_cover(book_id: int, db: Session = Depends(get_db)) -> Response:
     book = db.get(Book, book_id)
     if book is None:
         raise HTTPException(status_code=404, detail="Book not found")
-    src = Path(book.storage_path)
-    if not src.is_file():
-        raise HTTPException(status_code=410, detail="Book file is gone")
-    cover = _epub_cover(str(src))
+    cover = _cached_cover(book)
     if cover is None:
         # 404 keeps the OPDS feed honest; KOReader falls back to a placeholder.
         raise HTTPException(status_code=404, detail="No cover image in EPUB")
@@ -2175,10 +2302,7 @@ def ui_cover(book_id: int, db: Session = Depends(get_db)) -> Response:
     book = db.get(Book, book_id)
     if book is None:
         raise HTTPException(status_code=404, detail="Book not found")
-    src = Path(book.storage_path)
-    if not src.is_file():
-        raise HTTPException(status_code=404, detail="Book file is gone")
-    cover = _epub_cover(str(src))
+    cover = _cached_cover(book)
     if cover is None:
         raise HTTPException(status_code=404, detail="No cover image in EPUB")
     data, mime = cover

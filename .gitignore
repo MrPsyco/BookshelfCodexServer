@@ -15,6 +15,9 @@ tailwindcss
 /cloud/
 /rclone/
 
+# Cover cache (extracted EPUB covers) — regenerable, never commit.
+/cover_cache/
+
 # Temp commit-message + scratch files
 cmsg*.txt
 *.preconsolidation
